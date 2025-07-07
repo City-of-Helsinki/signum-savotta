@@ -205,7 +205,10 @@ ApplicationWindow {
             
             Image {
                 id: overallStatusIcon
-                source: (mainWindow.overallStatus == "READY_TO_USE") ? "assets/check-circle-fill.svg" :  (mainWindow.overallStatus == "READY_WITH_ERROR") ? "assets/alert-circle-fill.svg" : "assets/error-fill.svg"
+                source: 
+                    (mainWindow.overallStatus == "READY_TO_USE") ? "assets/check-circle-fill.svg" : 
+                    (mainWindow.overallStatus == "READY_WITH_ERROR") ? "assets/alert-circle-fill.svg" :
+                    "assets/error-fill.svg"
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
                 visible: false 
@@ -215,7 +218,10 @@ ApplicationWindow {
                 source: overallStatusIcon
                 anchors.fill: overallStatusIcon
                 colorization: 1.0
-                colorizationColor: (mainWindow.overallStatus == "READY_TO_USE") ? "#007a64" : (mainWindow.overallStatus == "READY_WITH_ERROR") ? "#ffda07" : "#b01038"
+                colorizationColor:
+                    (mainWindow.overallStatus == "READY_TO_USE") ? "#007a64" :
+                    (mainWindow.overallStatus == "READY_WITH_ERROR") ? "#ffda07" :
+                    "#b01038"
             }
             
             Text {

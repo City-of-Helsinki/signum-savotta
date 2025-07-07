@@ -41,6 +41,15 @@ class Command(Enum):
     ADDR_TAG_INFO = 0x0F
 
 def get_font_size_for_text(text, initial_size, font_path, target_height):
+    """
+    get_font_size_for_text Fits font size to target height for a text string in given font.
+
+    :param text: the text to be fitted
+    :param initial_size: known font size in which the string in the given font will fit the target height 
+    :param font_path: path to the font to use
+    :param target_height: target height in pixels 
+    :return: ImageFont font The font which will fit, tuple[float, float, float, float] bbox The bounding box, height float the height of the text in pixels
+    """
     font_size = initial_size
     font = ImageFont.truetype(font_path, font_size)
     bbox = font.getbbox(text)
@@ -56,6 +65,18 @@ def get_font_size_for_text(text, initial_size, font_path, target_height):
 
 
 def create_signum(classification, paasana, font_path, minimum_font_height, width, height):
+    """
+    get_font_size_for_text Creates a signum image for printing
+
+    :param classification: the classification (in YKL)
+    :param paasana: three letter word for alphabetical sorting
+    :param font_path: path to the font to use
+    :param minimum_font_height: minimum font size to use (text will use all the space it can get)
+    :param width: width of the signum in pixels. Note that this has to correspond to brother-ql continous roll widths 
+    :param width: height of the signum in pixels. The minimum value is 42 which corresponds to 9mm. Values less than that are considered to be CD case signums which will result in additional blank space added.
+    :return: Image the signum image
+    """
+
     # Standard label height is 42 pixels (9 mm) which is also the minumum height for brother-ql cutting unit.
     # Signums labels with maximum label text of 6mm height are used in CD jewel cases and digipacks.
     # CD signum labels are printed with extra blank space above and below the signum.
@@ -79,11 +100,26 @@ def create_signum(classification, paasana, font_path, minimum_font_height, width
     return image
 
 def build_command_hex(command_code, data):
+    """
+    build_command_hex Builds a command to be sent to Bibliotheca/3M Model 210 RFID reader
+
+    :param command_code: command code as two byte hexadecimal string (see inline emun Class Command)
+    :param data: string the data to be sent as string containing hex representation of the command parameters
+    :return: string the command as hex string
+    """
+
     length = len(bytes.fromhex(f"{command_code:02X}{data}{0:04X}"))
     payload = f"{length:04X}{command_code:02X}{data}"
     return f"D6{payload}{crc_ccitt(bytes.fromhex(payload)):04X}"
 
 def crc_ccitt(data):
+    """
+    crc_ccitt Calculates a CCITT CRC checksum for a given string
+
+    :param data: bytearray the data for which the checksum is to be calculated for
+    :return: 4 byte CCITT CRC checksum
+    """
+
     preset = 0xFFFF
     polynomial = 0x1021
     crc = preset
@@ -267,6 +303,8 @@ class Backend(QObject):
 
     def reader_loop(self):
 
+        # Store the previous reader state for use in determining the overall status.
+        # Solution for preventing read error scenarios from causing flickering in the UI
         previousReaderState = self.reader_state
 
         # Emit just to inform that the reader loop is on
@@ -281,6 +319,7 @@ class Backend(QObject):
                 case ReaderState.NO_READER_CONNECTED:
                     if self.serial_port is None:
                         # Autoconfigure serial port
+                        # FIXME: Fix Windows-only solution for cross-platform use
                         try:
                             self.serial_port = serial.Serial(
                                 port=f"COM{self.serial_port_number}",
@@ -371,7 +410,7 @@ class Backend(QObject):
                             self.active_barcode = response["barcode"]
                             self.reader_state = ReaderState.PRINT_TAG
                         elif response["command_code"] == "FE":
-                            # FIXME: error case should not happen
+                            # FIXME: error case, detected once, should not happen
                             self.reader_state = ReaderState.READER_ERROR
                         else:
                             self.active_address = None
@@ -384,7 +423,7 @@ class Backend(QObject):
                 case ReaderState.PRINT_TAG:
                     if (self.active_barcode != self.last_printed_barcode) and (self.overall_state == OverallState.READY_TO_USE):
                         # FIXME: Replace with values fetched from the backend
-                        image = create_signum(classification="78.12345", paasana="KLA", font_path='arial.ttf', minimum_font_height=32, width=413, height=40)
+                        image = create_signum(classification="78.12345", paasana="KLA", font_path='assets/arial.ttf', minimum_font_height=32, width=413, height=40)
                         qlr = BrotherQLRaster(self.printer.get('model', 'QL-810W'))
                         qlr.exception_on_warning = False
                         instructions = convert(
@@ -400,13 +439,13 @@ class Backend(QObject):
                             hq=False
                         )
                         # Uncomment the line below to show the signum in a window for debugging purposes
-                        # image.show()
-                        send(
-                            instructions=instructions,
-                            printer_identifier=self.printer['identifier'],
-                            backend_identifier=self.printer.get('backend', 'pyusb'),
-                            blocking=False
-                        )
+                        image.show()
+                        #send(
+                        #    instructions=instructions,
+                        #    printer_identifier=self.printer['identifier'],
+                        #    backend_identifier=self.printer.get('backend', 'pyusb'),
+                        #    blocking=False
+                        #)
                     else:
                         # If the barcode is the same as the last printed one, do not print it again
                         pass
@@ -435,7 +474,7 @@ class Backend(QObject):
             print(traceback.format_exc())
             pass
 
-                # Determine overall state based on backend, registration, reader, and printer states
+        # Determine overall state based on backend, registration, reader, and printer states
         if (
             (self.backend_state == BackendState.BACKEND_OK) and
             (self.registration_state == RegistrationState.REGISTRATION_SUCCEEDED) and
