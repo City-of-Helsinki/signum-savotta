@@ -2,14 +2,12 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 
-
 ApplicationWindow {
     id: mainWindow
     visible: true
     visibility: Window.Maximized
-    width: 600
-    height: 500
-    title: "Signum-savotta"
+    width: 1366
+    height: 768
     flags: Qt.FramelessWindowHint, Qt.Window | Qt.WindowStaysOnTopHint
 
     property QtObject backend
@@ -25,10 +23,12 @@ ApplicationWindow {
     property string message: ""
     property int iteration: 1
     property string printStationRegistrationName: ""
+    property bool batteryCharging: false
+    property int batteryPercentage: 100
 
     FontLoader {
         id: helsinkiGrotesk
-        source: "assets/HelsinkiGrotesk-Medium.otf"
+        source: "qrc:/assets/HelsinkiGrotesk-Medium.otf"
     }
 
     Connections {
@@ -68,7 +68,14 @@ ApplicationWindow {
         }
         function onPrint_station_registration_name_sig(msg) {
             mainWindow.printStationRegistrationName = msg;
-        }        
+        }
+        function onBatterycharging_sig(msg) {
+            mainWindow.batteryCharging = msg;
+        }
+        function onBatterypercentage_sig(msg) {
+            mainWindow.batteryPercentage = msg;
+        }
+
     }
 
     component StatusBox: Rectangle {
@@ -82,7 +89,7 @@ ApplicationWindow {
         
         FontLoader {
             id: helsinkiGrotesk
-            source: "assets/HelsinkiGrotesk-Medium.otf"
+            source: "qrc:/assets/HelsinkiGrotesk-Medium.otf"
         }
 
         width: 200
@@ -117,7 +124,7 @@ ApplicationWindow {
                 anchors.leftMargin: 20
                 anchors.bottom: logo.bottom
                 text: statusBox.text
-                font.pixelSize: 18
+                font.pixelSize: 16
                 font.family: helsinkiGrotesk.name
                 font.weight: 400
                 color: statusBox.foregroundColor
@@ -133,18 +140,18 @@ ApplicationWindow {
 
     Rectangle {
         id: topbar
-        height: 170
+        height: 128
         width: parent.width
         Rectangle {
             id: topbarfill
             anchors.top: parent.top
-            height: 85
+            height: 43
             width: parent.width
             color: "#9fc9eb"
         }
         Image {
             id: koros
-            source: "assets/koros-beat.svg"
+            source: "qrc:/assets/koros-beat.svg"
             anchors.top: topbarfill.bottom
             anchors.left: parent.left
             height: 85
@@ -161,7 +168,7 @@ ApplicationWindow {
         }
         Image {
             id: helsinkilogo
-            source: "assets/helsinki-fi-m-black.svg"
+            source: "qrc:/assets/helsinki-fi-m-black.svg"
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
             anchors.leftMargin: (parent.height - implicitHeight) / 2
@@ -181,11 +188,55 @@ ApplicationWindow {
             id: printStationName
             font.family: helsinkiGrotesk.name
             anchors.verticalCenter: parent.verticalCenter
-            anchors.right: parent.right
-            anchors.rightMargin: (parent.height - helsinkilogo.implicitHeight) / 2
+            anchors.right: batteryStatus.left
+            anchors.rightMargin: 20
             text: "Tulostusasema " + mainWindow.printStationRegistrationName
             font.pixelSize: 32
             color: "white"
+        }
+        Rectangle {
+            id: batteryStatus
+            anchors.right: parent.right
+            anchors.rightMargin: (parent.height - helsinkilogo.implicitHeight) / 2
+            anchors.verticalCenter: parent.verticalCenter
+            width: 48
+            height: childrenRect.height
+            color: "transparent"
+            Image {
+                id: batteryIcon
+                source:
+                    mainWindow.batteryCharging == true ? "qrc:/assets/ic_fluent_battery_charge_32_regular.svg" :
+                    (Math.floor(Math.abs(mainWindow.batteryPercentage) / 10) % 10 == 10) ? "qrc:/assets/ic_fluent_battery_10_32_regular.svg" :
+                    (Math.floor(Math.abs(mainWindow.batteryPercentage) / 10) % 10 == 9) ? "qrc:/assets/ic_fluent_battery_9_32_regular.svg" :
+                    (Math.floor(Math.abs(mainWindow.batteryPercentage) / 10) % 10 == 8) ? "qrc:/assets/ic_fluent_battery_8_32_regular.svg" :
+                    (Math.floor(Math.abs(mainWindow.batteryPercentage) / 10) % 10 == 7) ? "qrc:/assets/ic_fluent_battery_7_32_regular.svg" :
+                    (Math.floor(Math.abs(mainWindow.batteryPercentage) / 10) % 10 == 6) ? "qrc:/assets/ic_fluent_battery_6_32_regular.svg" :
+                    (Math.floor(Math.abs(mainWindow.batteryPercentage) / 10) % 10 == 5) ? "qrc:/assets/ic_fluent_battery_5_32_regular.svg" :
+                    (Math.floor(Math.abs(mainWindow.batteryPercentage) / 10) % 10 == 4) ? "qrc:/assets/ic_fluent_battery_4_32_regular.svg" :
+                    (Math.floor(Math.abs(mainWindow.batteryPercentage) / 10) % 10 == 3) ? "qrc:/assets/ic_fluent_battery_3_32_regular.svg" :
+                    (Math.floor(Math.abs(mainWindow.batteryPercentage) / 10) % 10 == 2) ? "qrc:/assets/ic_fluent_battery_2_32_regular.svg" :
+                    (Math.floor(Math.abs(mainWindow.batteryPercentage) / 10) % 10 == 1) ? "qrc:/assets/ic_fluent_battery_1_32_regular.svg" :
+                    "qrc:/assets/ic_fluent_battery_0_32_regular.svg"
+                anchors.top: parent.top
+                anchors.horizontalCenter: parent.horizontalCenter
+                visible: false 
+            }
+            MultiEffect {
+                source: batteryIcon
+                anchors.fill: batteryIcon
+                colorization: 1.0
+                colorizationColor: (Math.floor(Math.abs(mainWindow.batteryPercentage) / 10) % 10 > 2 || mainWindow.batteryCharging) ? "#ffffff" : "#b01038"
+            }
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: batteryIcon.bottom
+                font.family: helsinkiGrotesk.name
+                font.pixelSize: 16
+                color: (Math.floor(Math.abs(mainWindow.batteryPercentage) / 10) % 10 > 2 || mainWindow.batteryCharging) ? "#ffffff" : "#b01038"
+                text: (mainWindow.batteryCharging) ? "Latautuu" : mainWindow.batteryPercentage + "%"
+            }
+
         }
 
     }
@@ -195,20 +246,21 @@ ApplicationWindow {
         anchors.top: topbar.bottom
         anchors.bottom: statusBar.top
         anchors.left: parent.left
-        anchors.right: parent.right
+        anchors.leftMargin: Math.max(0, (mainWindow.width - 1366)/2)
+        width: mainWindow.width - Math.max(0, (mainWindow.width - 1366)/2)
 
         Rectangle {
 
             anchors.centerIn: parent
-            width: childrenRect.width
-            color: "blue"
+            width: parent.width
             
             Image {
                 id: overallStatusIcon
                 source: 
-                    (mainWindow.overallStatus == "READY_TO_USE") ? "assets/check-circle-fill.svg" : 
-                    (mainWindow.overallStatus == "READY_WITH_ERROR") ? "assets/alert-circle-fill.svg" :
-                    "assets/error-fill.svg"
+                    (mainWindow.overallStatus == "READY_TO_USE") ? "qrc:/assets/check-circle-fill.svg" : 
+                    (mainWindow.overallStatus == "READY_WITH_ERROR") ? "qrc:/assets/alert-circle-fill.svg" :
+                    (mainWindow.overallStatus == "BATTERY_LOW") ? "qrc:/assets/ic_fluent_battery_warning_regular.svg" :
+                    "qrc:/assets/error-fill.svg"
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
                 visible: false 
@@ -226,7 +278,7 @@ ApplicationWindow {
             
             Text {
                 color: "#333333"
-                width: mainWindow.width - overallStatusIcon.width - 20 - mainWindow.width / 3
+                width: parent.width - overallStatusIcon.width - 40 - Math.max(0, (mainWindow.width - 1366)/2)
                 wrapMode: Text.WordWrap
                 anchors.left: overallStatusIcon.right
                 anchors.leftMargin: 20
@@ -244,7 +296,7 @@ ApplicationWindow {
         anchors.left: parent.left
         anchors.bottom: parent.bottom
         width: parent.width
-        height: 100
+        height: 64
 
         StatusBox {
             id: backendStatusBox
@@ -255,7 +307,7 @@ ApplicationWindow {
             anchors.bottom: parent.bottom
 
             text: backendStatusText
-            logosource: "assets/company.svg"
+            logosource: "qrc:/assets/company.svg"
             backgroundColor: "#F2F2F2"
             foregroundColor: "#333333"
         }
@@ -269,7 +321,7 @@ ApplicationWindow {
             anchors.bottom: parent.bottom
 
             text: mainWindow.registrationStatusText
-            logosource: "assets/shield.svg"
+            logosource: "qrc:/assets/shield.svg"
             backgroundColor: "#F2F2F2"
             foregroundColor: "#333333"
         }
@@ -283,7 +335,7 @@ ApplicationWindow {
             anchors.bottom: parent.bottom
 
             text: mainWindow.readerStatusText
-            logosource: "assets/wifi.svg"
+            logosource: "qrc:/assets/wifi.svg"
             logoOpacity: 0.5 + 0.05 * mainWindow.iteration
             backgroundColor: "#F2F2F2"
             foregroundColor: "#333333"
@@ -299,7 +351,7 @@ ApplicationWindow {
             anchors.right: parent.right
 
             text: mainWindow.printerStatusText
-            logosource: "assets/printer.svg"
+            logosource: "qrc:/assets/printer.svg"
             backgroundColor: "#F2F2F2"
             foregroundColor: "#333333"
         }

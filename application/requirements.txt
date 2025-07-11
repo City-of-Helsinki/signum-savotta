@@ -1,4 +1,5 @@
 pyusb
 pyserial
 brother-ql2
-pyqt6
+pyside6
+psutil

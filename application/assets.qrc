@@ -1,0 +1,32 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource>
+    <file>assets/alert-circle-fill.svg</file>
+    <file>assets/arial.ttf</file>
+    <file>assets/check-circle-fill.svg</file>
+    <file>assets/company.svg</file>
+    <file>assets/error-fill.svg</file>
+    <file>assets/favicon-32x32.ico</file>
+    <file>assets/helsinki-fi-m-black.svg</file>
+    <file>assets/HelsinkiGrotesk-Medium.otf</file>
+    <file>assets/ic_fluent_battery_0_32_regular.svg</file>
+    <file>assets/ic_fluent_battery_1_32_regular.svg</file>
+    <file>assets/ic_fluent_battery_2_32_regular.svg</file>
+    <file>assets/ic_fluent_battery_3_32_regular.svg</file>
+    <file>assets/ic_fluent_battery_4_32_regular.svg</file>
+    <file>assets/ic_fluent_battery_5_32_regular.svg</file>
+    <file>assets/ic_fluent_battery_6_32_regular.svg</file>
+    <file>assets/ic_fluent_battery_7_32_regular.svg</file>
+    <file>assets/ic_fluent_battery_8_32_regular.svg</file>
+    <file>assets/ic_fluent_battery_9_32_regular.svg</file>
+    <file>assets/ic_fluent_battery_10_32_regular.svg</file>
+    <file>assets/ic_fluent_battery_charge_32_regular.svg</file>
+    <file>assets/ic_fluent_battery_warning_regular.svg</file>
+    <file>assets/koros-beat.svg</file>
+    <file>assets/printer.svg</file>
+    <file>assets/shield.svg</file>
+    <file>assets/signumsavotta.ico</file>
+    <file>assets/signumsavotta.png</file>
+    <file>assets/wifi.svg</file>
+    <file>main.qml</file>
+</qresource>
+</RCC>

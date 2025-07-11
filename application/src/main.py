@@ -4,16 +4,27 @@ import time
 
 import sys
 
-from PyQt6.QtGui import QGuiApplication
-from PyQt6.QtQml import QQmlApplicationEngine
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PySide6.QtGui import QGuiApplication, QIcon, QPixmap
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtCore import QObject, QTimer, Signal
 
 from brother_ql.raster import BrotherQLRaster
 from brother_ql.conversion import convert
 from brother_ql.backends.helpers import discover, send
 from PIL import Image, ImageDraw, ImageFont
 
+# Import resources from Qt Resource Compiler
+# Compile assets with command pyside6-rcc assets.qrc -o src/assets_rc.py
+import assets_rc
+
 import traceback
+
+import psutil
+
+# Import ctypes to set Windows application icon in taskbar
+import ctypes
+myappid = 'helsinki.signumsavotta.application.1' # arbitrary string
+ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
 class Command(Enum):
     NORM_READ_BLOCK_UID = 0xFE
@@ -204,6 +215,7 @@ class OverallState(Enum):
     NOT_READY_TO_USE = 0
     READY_TO_USE = 1
     READY_WITH_ERROR = 2
+    BATTERY_LOW = 3
 
 class BackendState(Enum):
     NO_BACKEND_RESPONSE = 0
@@ -233,25 +245,35 @@ RESPONSE_READER_READY_2 = bytes.fromhex("d500090400110a050119e23b")
 RESPONSE_NO_TAG_DETECTED = bytes.fromhex("d60007fe00000700af19")
 RESPONSE_SINGLE_TAG_DETECTED = bytes.fromhex("d60007fe0000000126af")
 
+# FIXME: Remove from final. Only for testing low battery state.
+class DummyBattery:
+    percent = 0
+    power_plugged = False
+    def __init__(self, percent, power_plugged):
+        self.percent = percent
+        self.power_plugged = power_plugged
+
 class Backend(QObject):
 
-    # 
+    # FIXME: Load these from configuration file
     print_station_registration_name = "PASILA 01"
     print_station_registration_key = ""
 
     # Signals for updating the UI
-    print_station_registration_name_sig = pyqtSignal(str, arguments=['string'])
-    backend_state_sig = pyqtSignal(str, arguments=['string'])
-    registration_state_sig = pyqtSignal(str, arguments=['string'])
-    reader_state_sig = pyqtSignal(str, arguments=['string'])
-    printer_state_sig = pyqtSignal(str, arguments=['string'])
-    overall_state_sig = pyqtSignal(str, arguments=['string'])
-    message_sig = pyqtSignal(str, arguments=['string'])
-    backend_statustext_sig = pyqtSignal(str, arguments=['string'])
-    registration_statustext_sig = pyqtSignal(str, arguments=['string'])
-    reader_statustext_sig = pyqtSignal(str, arguments=['string'])
-    printer_statustext_sig = pyqtSignal(str, arguments=['string'])
-    iteration_sig = pyqtSignal(int, arguments=['int'])
+    print_station_registration_name_sig = Signal(str, arguments=['string'])
+    backend_state_sig = Signal(str, arguments=['string'])
+    registration_state_sig = Signal(str, arguments=['string'])
+    reader_state_sig = Signal(str, arguments=['string'])
+    printer_state_sig = Signal(str, arguments=['string'])
+    overall_state_sig = Signal(str, arguments=['string'])
+    message_sig = Signal(str, arguments=['string'])
+    backend_statustext_sig = Signal(str, arguments=['string'])
+    registration_statustext_sig = Signal(str, arguments=['string'])
+    reader_statustext_sig = Signal(str, arguments=['string'])
+    printer_statustext_sig = Signal(str, arguments=['string'])
+    iteration_sig = Signal(int, arguments=['int'])
+    batterypercentage_sig = Signal(int, arguments=['int'])
+    batterycharging_sig = Signal(bool, arguments=['bool'])
 
     # Overall state initialization
     overall_state = OverallState.NOT_READY_TO_USE
@@ -280,7 +302,7 @@ class Backend(QObject):
     error_cycles = 0
     error_cycles_grace_period = 3
 
-    # Timing values
+    # Timing values FIXME: Load from configuration file
     ui_interval = 200
     reader_wait = 0.1
     iteration = 0
@@ -313,6 +335,12 @@ class Backend(QObject):
         else:
             self.iteration = 1
         self.iteration_sig.emit(self.iteration)
+
+        # Laptop battery
+        battery = psutil.sensors_battery()
+        if battery:
+            self.batterycharging_sig.emit(battery.power_plugged)
+            self.batterypercentage_sig.emit(battery.percent)
 
         try:
             match self.reader_state:
@@ -405,7 +433,6 @@ class Backend(QObject):
                     resp = self.read_data()
                     try:
                         response = parseReadMultiblockResponse(resp)
-                        print( response["barcode"])
                         if response["checksum_match"]:
                             self.active_barcode = response["barcode"]
                             self.reader_state = ReaderState.PRINT_TAG
@@ -439,13 +466,13 @@ class Backend(QObject):
                             hq=False
                         )
                         # Uncomment the line below to show the signum in a window for debugging purposes
-                        image.show()
-                        #send(
-                        #    instructions=instructions,
-                        #    printer_identifier=self.printer['identifier'],
-                        #    backend_identifier=self.printer.get('backend', 'pyusb'),
-                        #    blocking=False
-                        #)
+                        # image.show()
+                        send(
+                            instructions=instructions,
+                            printer_identifier=self.printer['identifier'],
+                            backend_identifier=self.printer.get('backend', 'pyusb'),
+                            blocking=False
+                        )
                     else:
                         # If the barcode is the same as the last printed one, do not print it again
                         pass
@@ -454,8 +481,8 @@ class Backend(QObject):
                     self.reader_state = ReaderState.SINGLE_TAG_READ
 
         except KeyboardInterrupt:
-            # Occurs when the user presses Ctrl+C. When it happens, close the serial port and exit the loop.
-            self.serial_port.close()
+            # KeyboardInterrupts are ignored
+            pass
 
         except serial.SerialException as e:
             # Occurs when someone unplugs the reader. When it happens, reset the reader state and continue.
@@ -469,13 +496,15 @@ class Backend(QObject):
             pass
 
         except Exception as e:
-            # These exceptions are always sent to Sentry
+            # FIXME: These exceptions are always sent to Sentry
             print(f"Error: {e}")
             print(traceback.format_exc())
             pass
 
-        # Determine overall state based on backend, registration, reader, and printer states
-        if (
+        # Determine overall state based on battery, backend, registration, reader, and printer states
+        if(battery.percent < 10):
+            self.overall_state = OverallState.BATTERY_LOW
+        elif (
             (self.backend_state == BackendState.BACKEND_OK) and
             (self.registration_state == RegistrationState.REGISTRATION_SUCCEEDED) and
             (self.reader_state != ReaderState.NO_READER_CONNECTED) and
@@ -547,12 +576,20 @@ class Backend(QObject):
             self.printer_statustext_sig.emit("Tulostinta ei löydy")
 
         # Determine the main message to display on the UI. We try to formulate a message using natural language.
-        if self.overall_state == OverallState.NOT_READY_TO_USE:
+        if self.overall_state == OverallState.BATTERY_LOW:
+            self.message_sig.emit(
+                "<p><b>Virta vähissä!</b></p>" +
+                "<p>Tietokoneen akku on miltei tyhjä. Tulostus on varmuuden vuoksi kytketty pois päältä.</p>"
+                "<p><b>Ohjeet:</b></p>" +
+                "<p><ul><li>Käy viemässä tietokone lataukseen.</li></ul></p>"
+
+            )
+        elif self.overall_state == OverallState.NOT_READY_TO_USE:
             positives, negatives, fixes = [], [], []
             if self.backend_state == BackendState.BACKEND_OK:
                 positives.append("taustajärjestelmä toimii")
             if self.registration_state == RegistrationState.REGISTRATION_SUCCEEDED:
-                positives.append("tulostusasema on valtuutettu")
+                positives.append("asema on valtuutettu")
             if self.reader_state is not ReaderState.NO_READER_CONNECTED:
                 positives.append("RFID-lukija on yhdistetty")
             if self.printer_state == PrinterState.PRINTER_CONNECTED:
@@ -614,12 +651,25 @@ class Backend(QObject):
 
 app = QGuiApplication(sys.argv)
 
-engine = QQmlApplicationEngine()
-engine.quit.connect(app.quit)
-engine.load('main.qml')
+iconpixmap = QPixmap(":/assets/signumsavotta.png")
+app_icon = QIcon()
+for size in [256, 128, 96, 64, 48, 32, 24, 16]:
+    app_icon.addPixmap(iconpixmap.scaledToHeight(size))
+app.setWindowIcon(app_icon)
 
 backend = Backend()
-engine.rootObjects()[0].setProperty('backend', backend)
 backend.reader_loop()
+
+engine = QQmlApplicationEngine()
+engine.quit.connect(app.quit)
+engine.load(':/main.qml')
+engine.rootObjects()[0].setProperty('backend', backend)
+
+for object in engine.rootObjects():
+    if object.isWindowType():
+        object.setIcon(app_icon)
+        # object.setOpacity(0.5)
+        object.setTitle("Signum-savotta")
+        object.requestActivate()
 
 sys.exit(app.exec())
