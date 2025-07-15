@@ -238,7 +238,6 @@ ApplicationWindow {
             }
 
         }
-
     }
 
     Rectangle {

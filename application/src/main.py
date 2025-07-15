@@ -13,6 +13,8 @@ from brother_ql.conversion import convert
 from brother_ql.backends.helpers import discover, send
 from PIL import Image, ImageDraw, ImageFont
 
+from helmet_rfid_tag import HelmetRfidTag
+
 # Import resources from Qt Resource Compiler
 # Compile assets with command pyside6-rcc assets.qrc -o src/assets_rc.py
 import assets_rc
@@ -25,6 +27,7 @@ import psutil
 import ctypes
 myappid = 'helsinki.signumsavotta.application.1' # arbitrary string
 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
 
 class Command(Enum):
     NORM_READ_BLOCK_UID = 0xFE
@@ -186,7 +189,7 @@ def parseReadMultiblockResponse(data):
             "address":  data[5:13].hex(),
             "start_block":  f'{data[13]:02X}',
             "block_count":  f'{data[14]:02X}',
-            "raw_blocks":  data_blocks.hex(),
+            "raw_blocks":  data[15:47],
             "checksum_match": False,
             "barcode": int.from_bytes(data_blocks[2:8], byteorder='big', signed=False)
         }
@@ -234,6 +237,7 @@ class ReaderState(Enum):
     SINGLE_TAG_READ = 4
     PRINT_TAG = 5
     READER_ERROR = 6
+    UNKNOWN_TAG = 7
 
 class PrinterState(Enum):
     NO_PRINTER_CONNECTED = 0
@@ -306,6 +310,7 @@ class Backend(QObject):
     ui_interval = 200
     reader_wait = 0.1
     iteration = 0
+    read_message = ""
 
     def __init__(self):
         super().__init__()
@@ -341,6 +346,14 @@ class Backend(QObject):
         if battery:
             self.batterycharging_sig.emit(battery.power_plugged)
             self.batterypercentage_sig.emit(battery.percent)
+
+        # Autoconfigure printer
+        devices = discover(backend_identifier='pyusb')
+        if not devices:
+            self.printer_state = PrinterState.NO_PRINTER_CONNECTED
+        else:
+            self.printer_state = PrinterState.PRINTER_CONNECTED
+            self.printer = devices[0]
 
         try:
             match self.reader_state:
@@ -387,7 +400,7 @@ class Backend(QObject):
                             else:
                                 self.reader_state = ReaderState.NO_READER_CONNECTED
 
-                case ReaderState.READER_CONNECTED | ReaderState.MULTIPLE_TAGS_DETECTED | ReaderState.READER_ERROR:
+                case ReaderState.READER_CONNECTED | ReaderState.MULTIPLE_TAGS_DETECTED | ReaderState.READER_ERROR | ReaderState.UNKNOWN_TAG:
                     cmd = build_command_hex(Command.NORM_READ_BLOCK_UID.value, "0007")
                     self.send_data(bytes.fromhex(cmd))
                     time.sleep(self.reader_wait)
@@ -434,8 +447,19 @@ class Backend(QObject):
                     try:
                         response = parseReadMultiblockResponse(resp)
                         if response["checksum_match"]:
-                            self.active_barcode = response["barcode"]
-                            self.reader_state = ReaderState.PRINT_TAG
+                            helmet_rfid_tag = HelmetRfidTag(response["raw_blocks"])
+                            if(helmet_rfid_tag.welformed_data):
+                                msg = []
+                                msg.append("<p><ul>")
+                                d = helmet_rfid_tag.__dict__
+                                for field in d:
+                                    msg.append(f"<li>{field}: {d[field]}</li>")
+                                msg.append("</ul></p>")
+                                self.read_message = "".join(msg)                                
+                                self.active_barcode = helmet_rfid_tag.primary_item_identifier
+                                self.reader_state = ReaderState.PRINT_TAG
+                            else:
+                                self.reader_state = ReaderState.UNKNOWN_TAG
                         elif response["command_code"] == "FE":
                             # FIXME: error case, detected once, should not happen
                             self.reader_state = ReaderState.READER_ERROR
@@ -467,12 +491,12 @@ class Backend(QObject):
                         )
                         # Uncomment the line below to show the signum in a window for debugging purposes
                         # image.show()
-                        send(
-                            instructions=instructions,
-                            printer_identifier=self.printer['identifier'],
-                            backend_identifier=self.printer.get('backend', 'pyusb'),
-                            blocking=False
-                        )
+                        #send(
+                        #    instructions=instructions,
+                        #    printer_identifier=self.printer['identifier'],
+                        #    backend_identifier=self.printer.get('backend', 'pyusb'),
+                        #    blocking=False
+                        #)
                     else:
                         # If the barcode is the same as the last printed one, do not print it again
                         pass
@@ -510,8 +534,10 @@ class Backend(QObject):
             (self.reader_state != ReaderState.NO_READER_CONNECTED) and
             (self.reader_state != ReaderState.READER_ERROR) and
             (self.reader_state != ReaderState.MULTIPLE_TAGS_DETECTED) and
+            (self.reader_state != ReaderState.UNKNOWN_TAG) and
             (previousReaderState != ReaderState.READER_ERROR) and 
             (previousReaderState != ReaderState.MULTIPLE_TAGS_DETECTED) and
+            (previousReaderState != ReaderState.UNKNOWN_TAG) and
             (self.printer_state == PrinterState.PRINTER_CONNECTED)
             ):
             self.error_cycles = 0
@@ -522,7 +548,9 @@ class Backend(QObject):
             (self.reader_state == ReaderState.READER_ERROR or
              previousReaderState == ReaderState.READER_ERROR or
              self.reader_state == ReaderState.MULTIPLE_TAGS_DETECTED or
-             previousReaderState == ReaderState.MULTIPLE_TAGS_DETECTED
+             previousReaderState == ReaderState.MULTIPLE_TAGS_DETECTED or
+             self.reader_state == ReaderState.UNKNOWN_TAG or
+             previousReaderState == ReaderState.UNKNOWN_TAG
             ) and
             (self.printer_state == PrinterState.PRINTER_CONNECTED)
             ):
@@ -536,14 +564,6 @@ class Backend(QObject):
             else:
                 self.error_cycles = 0
                 self.overall_state = OverallState.NOT_READY_TO_USE
-
-        # Autoconfigure printer
-        devices = discover(backend_identifier='pyusb')
-        if not devices:
-            self.printer_state = PrinterState.NO_PRINTER_CONNECTED
-        else:
-            self.printer_state = PrinterState.PRINTER_CONNECTED
-            self.printer = devices[0]
 
         # Emit print station registration name
         self.print_station_registration_name_sig.emit(f"{self.print_station_registration_name}")
@@ -626,6 +646,13 @@ class Backend(QObject):
                     "<p><b>Ohjeet:</b></p>" +
                     "<p><ul><li>Varmista, että lukijan läheisyydessä ei ole muita niteitä kuin se, jota yrität tarroittaa</li></ul></p>"
                 )
+            elif(self.reader_state == ReaderState.UNKNOWN_TAG or previousReaderState == ReaderState.UNKNOWN_TAG):
+                self.message_sig.emit(
+                    "<p><b>Virhetilanne</b></p>" +
+                    "<p>Niteessä on käytöstä poistuva RFID-tagi. Se pitää vaihtaa välittömästi.</p>"
+                    "<p><b>Ohjeet:</b></p>" +
+                    "<p><ul><li>Laita nide syrjään. Anna vuoron lopuksi kaikki vastaavat niteet kirjastovirkailijalle. Kirjastovirkailija lähettää niteen jatkokäsittelyyn.</li></ul></p>"
+                )
             else:
                 self.message_sig.emit(
                     "<p><b>Virhetilanne</b></p>" +
@@ -642,7 +669,7 @@ class Backend(QObject):
             self.active_barcode is not None
             ):
             # FIXME: Replace with the book title
-            self.message_sig.emit(f"Luettu: {self.active_barcode}")
+            self.message_sig.emit(f"{self.read_message}")
         else:
             self.message_sig.emit(
                 "<p><b>Valmiina tulostamaan tarroja!</b></p>" +
