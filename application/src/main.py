@@ -190,8 +190,7 @@ def parseReadMultiblockResponse(data):
             "start_block":  f'{data[13]:02X}',
             "block_count":  f'{data[14]:02X}',
             "raw_blocks":  data[15:47],
-            "checksum_match": False,
-            "barcode": int.from_bytes(data_blocks[2:8], byteorder='big', signed=False)
+            "checksum_match": False
         }
         if bytes.fromhex(build_command_hex(
             Command.ADDR_READ_MULTIBLOCK.value,
@@ -202,6 +201,7 @@ def parseReadMultiblockResponse(data):
     except:
         return None
 
+# This function is simply for making the tone of voice of error messages a bit more humane.
 def join_with_and(items, last_separator="ja"):
     if not items:
         return ""
@@ -292,8 +292,8 @@ class Backend(QObject):
     reader_version = None
     reader_state = ReaderState.NO_READER_CONNECTED
     active_address = None
-    active_barcode = None
-    last_printed_barcode = None
+    active_tag = None
+    last_printed_tag = None
     serial_port_number = 1
     serial_port = None
 
@@ -328,6 +328,7 @@ class Backend(QObject):
             return data
         return None
 
+    # FIXME: The reader event loop contains also the UI event loop. Should this code ever be reused, the two need to be separate.
     def reader_loop(self):
 
         # Store the previous reader state for use in determining the overall status.
@@ -411,29 +412,29 @@ class Backend(QObject):
                         if uid_res is not None:
                             if(uid_res["num_tags"] == 1 and uid_res["afi"] == 0):
                                 self.active_address = uid_res["tags"][0]["address"].hex()
-                                self.last_printed_barcode = None
+                                self.last_printed_tag = None
                                 self.reader_state = ReaderState.SINGLE_TAG_READ
                             elif(uid_res["num_tags"] > 1):
                                 self.active_address = None
-                                self.active_barcode = None
-                                self.last_printed_barcode = None
+                                self.active_tag = None
+                                self.last_printed_tag = None
                                 self.reader_state = ReaderState.MULTIPLE_TAGS_DETECTED
                             else:
                                 self.active_address = None
-                                self.active_barcode = None
-                                self.last_printed_barcode = None
+                                self.active_tag = None
+                                self.last_printed_tag = None
                                 self.reader_state = ReaderState.READER_CONNECTED
                         else:
                             # The reader responds slowly which means that the response to the command is available at next loop iteration
                             # We handle this case simply by dropping to READER_CONNECTED
                             self.active_address = None
-                            self.active_barcode = None
-                            self.last_printed_barcode = None
+                            self.active_tag = None
+                            self.last_printed_tag = None
                             self.reader_state = ReaderState.READER_CONNECTED
                     else:
                         self.active_address = None
-                        self.active_barcode = None
-                        self.last_printed_barcode = None
+                        self.active_tag = None
+                        self.last_printed_tag = None
                         self.reader_state = ReaderState.NO_READER_CONNECTED
 
                 case ReaderState.SINGLE_TAG_READ:
@@ -446,6 +447,7 @@ class Backend(QObject):
                     resp = self.read_data()
                     try:
                         response = parseReadMultiblockResponse(resp)
+                        print(response)
                         if response["checksum_match"]:
                             helmet_rfid_tag = HelmetRfidTag(response["raw_blocks"])
                             if(helmet_rfid_tag.welformed_data):
@@ -456,7 +458,7 @@ class Backend(QObject):
                                     msg.append(f"<li>{field}: {d[field]}</li>")
                                 msg.append("</ul></p>")
                                 self.read_message = "".join(msg)                                
-                                self.active_barcode = helmet_rfid_tag.primary_item_identifier
+                                self.active_tag = helmet_rfid_tag
                                 self.reader_state = ReaderState.PRINT_TAG
                             else:
                                 self.reader_state = ReaderState.UNKNOWN_TAG
@@ -465,14 +467,14 @@ class Backend(QObject):
                             self.reader_state = ReaderState.READER_ERROR
                         else:
                             self.active_address = None
-                            self.active_barcode = None
-                            self.last_printed_barcode = None
+                            self.active_tag = None
+                            self.last_printed_tag = None
                             self.reader_state = ReaderState.READER_ERROR
                     except:
                         self.reader_state = ReaderState.READER_CONNECTED
 
                 case ReaderState.PRINT_TAG:
-                    if (self.active_barcode != self.last_printed_barcode) and (self.overall_state == OverallState.READY_TO_USE):
+                    if (self.active_tag != self.last_printed_tag) and (self.overall_state == OverallState.READY_TO_USE):
                         # FIXME: Replace with values fetched from the backend
                         image = create_signum(classification="78.12345", paasana="KLA", font_path='assets/arial.ttf', minimum_font_height=32, width=413, height=40)
                         qlr = BrotherQLRaster(self.printer.get('model', 'QL-810W'))
@@ -498,10 +500,10 @@ class Backend(QObject):
                         #    blocking=False
                         #)
                     else:
-                        # If the barcode is the same as the last printed one, do not print it again
+                        # If the tag is the same as the last printed one, do not print it again
                         pass
                     
-                    self.last_printed_barcode = self.active_barcode
+                    self.last_printed_tag = self.active_tag
                     self.reader_state = ReaderState.SINGLE_TAG_READ
 
         except KeyboardInterrupt:
@@ -513,9 +515,9 @@ class Backend(QObject):
             self.serial_port.close()
             self.serial_port = None
             self.reader_state = ReaderState.NO_READER_CONNECTED
-            self.last_printed_barcode = None
+            self.last_printed_tag = None
             self.active_address = None
-            self.active_barcode = None
+            self.active_tag = None
             self.reader_version = None
             pass
 
@@ -649,7 +651,7 @@ class Backend(QObject):
             elif(self.reader_state == ReaderState.UNKNOWN_TAG or previousReaderState == ReaderState.UNKNOWN_TAG):
                 self.message_sig.emit(
                     "<p><b>Virhetilanne</b></p>" +
-                    "<p>Niteessä on käytöstä poistuva RFID-tagi. Se pitää vaihtaa välittömästi.</p>"
+                    "<p>Niteessä on viallinen RFID-tagi. Se pitää vaihtaa ennen signum-tarran tulostamista.</p>"
                     "<p><b>Ohjeet:</b></p>" +
                     "<p><ul><li>Laita nide syrjään. Anna vuoron lopuksi kaikki vastaavat niteet kirjastovirkailijalle. Kirjastovirkailija lähettää niteen jatkokäsittelyyn.</li></ul></p>"
                 )
@@ -666,7 +668,7 @@ class Backend(QObject):
                 )
         elif (
             (self.reader_state == ReaderState.SINGLE_TAG_READ or self.reader_state == ReaderState.PRINT_TAG) and
-            self.active_barcode is not None
+            self.active_tag is not None
             ):
             # FIXME: Replace with the book title
             self.message_sig.emit(f"{self.read_message}")
@@ -695,7 +697,6 @@ engine.rootObjects()[0].setProperty('backend', backend)
 for object in engine.rootObjects():
     if object.isWindowType():
         object.setIcon(app_icon)
-        # object.setOpacity(0.5)
         object.setTitle("Signum-savotta")
         object.requestActivate()
 

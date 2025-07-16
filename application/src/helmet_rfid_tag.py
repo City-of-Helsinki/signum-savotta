@@ -1,4 +1,5 @@
 from enum import Enum
+from dataclasses import dataclass
 
 iso_iec_latch_shift_values = ["Latch upper", "Shift upper", "Latch lower", "Shift lower", "Latch numeric", "Shift numeric"]
 
@@ -194,6 +195,7 @@ def decode_iso_iec_4bit_5bit(binary_string, starting_dict):
     latch_dict = starting_dict
     shift_dict = starting_dict
 
+    # FIXME: Should be the minimum amount of bits for the used dictionary
     while len(bs_to_process) > 3:
         if shift:
             active_dict = shift_dict
@@ -229,6 +231,7 @@ def decode_with_dict(binary_string, dictonary, min_length):
     result = []
     bs_to_process = binary_string
 
+    # FIXME: use greater or equal instead?
     while len(bs_to_process) > min_length:
         for key in dictonary:
             if bs_to_process[0:len(key)] == key :
@@ -313,6 +316,7 @@ class Encoding(Enum):
     UNKNOWN_COMPACTION = 8
 
 
+@dataclass(repr=True, eq=True, order=False, unsafe_hash=False, frozen=False)
 class HelmetRfidTag():
 
     welformed_data = False
