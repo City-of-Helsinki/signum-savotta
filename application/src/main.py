@@ -447,7 +447,6 @@ class Backend(QObject):
                     resp = self.read_data()
                     try:
                         response = parseReadMultiblockResponse(resp)
-                        print(response)
                         if response["checksum_match"]:
                             helmet_rfid_tag = HelmetRfidTag(response["raw_blocks"])
                             if(helmet_rfid_tag.welformed_data):
@@ -493,12 +492,12 @@ class Backend(QObject):
                         )
                         # Uncomment the line below to show the signum in a window for debugging purposes
                         # image.show()
-                        #send(
-                        #    instructions=instructions,
-                        #    printer_identifier=self.printer['identifier'],
-                        #    backend_identifier=self.printer.get('backend', 'pyusb'),
-                        #    blocking=False
-                        #)
+                        send(
+                            instructions=instructions,
+                            printer_identifier=self.printer['identifier'],
+                            backend_identifier=self.printer.get('backend', 'pyusb'),
+                            blocking=False
+                        )
                     else:
                         # If the tag is the same as the last printed one, do not print it again
                         pass

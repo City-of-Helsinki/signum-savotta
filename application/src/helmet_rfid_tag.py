@@ -352,6 +352,7 @@ class HelmetRfidTag():
         if data_bytes is not None:
              self.parse_data(data_bytes)
 
+    #FIXME: Unit tests for this code
     def decode(self, encoding, data, oid):
         match (encoding, oid):
             case (Encoding.APPLICATION_SPECIFIC, Oid.CONTENT_PARAMETER):
@@ -406,6 +407,7 @@ class HelmetRfidTag():
             case (_, _): # Unknown compaction
                 return f"unknown encoding: {encoding}, data: {data}"
 
+    # FIXME: Unit tests for this code.
     def parse_data(self, data_bytes):
         binary_string = ''.join(format(byte, '08b') for byte in data_bytes)                 
         length = 0
@@ -413,20 +415,21 @@ class HelmetRfidTag():
         self.welformed_data = True
         try:
             while len(binary_string) > 0 and len(binary_string) != prev_length:
-                precursor = binary_string[0]
+                offset = binary_string[0]
 
                 encoding = Encoding(int(binary_string[1: 4], 2))
                 oid = Oid(int(binary_string[4: 8], 2))
 
-                offset = 0
-                if(precursor == "1"):
-                    offset = int(binary_string[8: 16],2) + 8
+                padding = 0
+                if(offset == "1"):
+                    padding = int(binary_string[8: 16], 2)
 
+                starting_position = 8 if offset == "1" else 0
                 try:
-                    length = int(binary_string[offset+8: offset+16],2)
+                    length = int(binary_string[starting_position + 8: starting_position + 16],2)
                 except:
                     length = 0
-                data = binary_string[offset + 16: offset + 16 + length * 8]
+                data = binary_string[starting_position + 16: starting_position + 16 + length * 8]
 
                 value = self.decode(encoding=encoding, data=data, oid=oid)
                 match oid:
@@ -457,7 +460,7 @@ class HelmetRfidTag():
                     case Oid.ALTERNATIVE_ILL_BORROWING_INSTITUTION: self.alternative_ill_borrowing_institution = value
                     case Oid.LOCAL_DATA_C: self.local_data_c = value
                 prev_length = len(binary_string)
-                binary_string = binary_string[(offset +16 + length * 8):]
+                binary_string = binary_string[(starting_position + 16 + length * 8 + padding * 8):]
         except:
             self.welformed_data = False
 
