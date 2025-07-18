@@ -1,0 +1,46 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: backend_service
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    env_file:
+      - ./backend/.env
+    networks:
+      - app-network
+
+  etl_component:
+    build:
+      context: ./etl_component
+    container_name: etl_service
+    depends_on:
+      - db
+    env_file:
+      - ./etl_component/.env
+    networks:
+      - app-network
+
+  db:
+    image: postgres:latest
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: signum_savotta
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: signum_savotta
+    ports:
+      - "5432:5432"
+    volumes:
+      - type: bind
+        source: ./postgresql/
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: true
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

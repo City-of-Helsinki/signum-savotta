@@ -29,6 +29,3 @@ USER nobody:0
 
 # Command to run the application
 CMD ["/bin/sh", "-c", "/app/entrypoint.sh"]
-
-# Expose the application port
-EXPOSE 8000/TCP

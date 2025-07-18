@@ -559,6 +559,7 @@ class Backend(QObject):
             self.overall_state = OverallState.READY_WITH_ERROR
         else:
             # Allow grace period when transitioning to NOT_READY_TO_USE state to avoid flickering in the UI for brief loss of connectivity
+            # FIXME: Use transition states instead and have specific grace periods for each of them
             if (self.overall_state == OverallState.READY_TO_USE) and (self.error_cycles < self.error_cycles_grace_period):
                 self.error_cycles += 1
                 OverallState.READY_TO_USE

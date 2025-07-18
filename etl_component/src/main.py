@@ -1,6 +1,28 @@
-max_synced_id = 0
-sync_batch_size = 10000 
-f"""WITH
+import asyncio
+import logging
+from io import StringIO
+
+import asyncpg
+import httpx
+import pandas as pd
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Configuration
+CONFIG_URL = "http://localhost:8000/api/config"
+UPLOAD_URL = "http://localhost:8000/api/upload"
+DB_CONFIG = {
+    "user": "user",
+    "password": "password",
+    "database": "mydatabase",
+    "host": "localhost",
+    "port": 5432
+}
+
+sql_query = """WITH
 item AS (
 	SELECT
 		record_id,
@@ -8,10 +30,10 @@ item AS (
 	FROM
 		sierra_view.item_record
 	WHERE
-		record_id > {max_synced_id}
+		record_id > $1
 	ORDER BY
 		record_id
-	LIMIT {sync_batch_size}
+	LIMIT $2
 ),
 item_number AS (
 	SELECT id, concat(concat('i',record_num),agency_code_num) as item_number
@@ -88,7 +110,8 @@ SELECT
 	item.record_id AS item_record_id,
 	item_number.item_number,
 	item_record_property.barcode,
-	bib_number.bib_number,
+	bib_record_property.bib_record_id,
+    bib_number.bib_number,
 	bib_record_property.best_author,
 	bib_record_property.best_title,
 	item.itype_code_num,
@@ -107,3 +130,56 @@ LEFT JOIN bib_record_property ON bib_item_link.bib_record_id = bib_record_proper
 LEFT JOIN material_property_myuser ON bib_record_property.material_code = material_property_myuser.code
 LEFT JOIN raw_subfields ON raw_subfields.record_id = bib_item_link.bib_record_id
 ORDER BY item_record_id"""
+
+# Scheduled task
+async def sync_task():
+    try:
+        async with httpx.AsyncClient() as client:
+            # Fetch sync configuration
+            config_response = await client.get(CONFIG_URL)
+            config_response.raise_for_status()
+            config = config_response.json()
+            last_synced_id = config.get("last_synced_id")
+            batch_size = config.get("batch_size")
+
+            if last_synced_id is None or batch_size is None:
+                logger.error("Missing sync parameters in config response.")
+                return
+
+            # Query the database
+            conn = await asyncpg.connect(**DB_CONFIG)
+            query = sql_query
+            rows = await conn.fetch(query, last_synced_id, batch_size)
+            await conn.close()
+
+            if not rows:
+                logger.info("No new records to sync.")
+                return
+
+            # Convert to TSV
+            df = pd.DataFrame(rows)
+            tsv_buffer = StringIO()
+            df.to_csv(tsv_buffer, sep='\t', index=False)
+            tsv_buffer.seek(0)
+
+            # Upload TSV
+            files = {'file': ('data.tsv', tsv_buffer.getvalue(), 'text/tab-separated-values')}
+            upload_response = await client.post(UPLOAD_URL, files=files)
+            upload_response.raise_for_status()
+            logger.info("Data uploaded successfully.")
+
+    except Exception as e:
+        logger.exception(f"Error during sync task: {e}")
+
+# Main entry point
+async def main():
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(sync_task, 'interval', minutes=1)
+    scheduler.start()
+
+    # Keep the script running
+    while True:
+        await asyncio.sleep(60)
+
+if __name__ == "__main__":
+    asyncio.run(main())
