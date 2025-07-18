@@ -1,35 +1,35 @@
-import serial
-from enum import Enum
-import time
+"""
+Signum labeller application
+"""
 
+import ctypes
 import sys
+import time
+import traceback
+from enum import Enum
 
+import assets_rc  # noqa: F401
+import psutil
+import serial
+from brother_ql.backends.helpers import discover, send
+from brother_ql.conversion import convert
+from brother_ql.raster import BrotherQLRaster
+from helmet_rfid_tag import HelmetRfidTag
+from PIL import Image, ImageDraw, ImageFont
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QIcon, QPixmap
 from PySide6.QtQml import QQmlApplicationEngine
-from PySide6.QtCore import QObject, QTimer, Signal
 
-from brother_ql.raster import BrotherQLRaster
-from brother_ql.conversion import convert
-from brother_ql.backends.helpers import discover, send
-from PIL import Image, ImageDraw, ImageFont
-
-from helmet_rfid_tag import HelmetRfidTag
-
-# Import resources from Qt Resource Compiler
-# Compile assets with command pyside6-rcc assets.qrc -o src/assets_rc.py
-import assets_rc
-
-import traceback
-
-import psutil
-
-# Import ctypes to set Windows application icon in taskbar
-import ctypes
-myappid = 'helsinki.signumsavotta.application.1' # arbitrary string
+# Set app user model ID in so that application icon is visible in Windows taskbar
+myappid = "helsinki.signumsavotta.application.1"
 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
 
 class Command(Enum):
+    """
+    Enum for RFID Serial protocol command descriptor byte.
+    """
+
     NORM_READ_BLOCK_UID = 0xFE
     NORM_READER_VERSION = 0x11
     NORM_ISO_PASS_THROUGH = 0x14
@@ -54,27 +54,29 @@ class Command(Enum):
 
     ADDR_TAG_INFO = 0x0F
 
+
 def get_font_size_for_text(text, initial_size, font_path, target_height):
     """
     get_font_size_for_text Fits font size to target height for a text string in given font.
 
     :param text: the text to be fitted
-    :param initial_size: known font size in which the string in the given font will fit the target height 
+    :param initial_size: known font size in which the string in the given font will fit the target height
     :param font_path: path to the font to use
-    :param target_height: target height in pixels 
-    :return: ImageFont font The font which will fit, tuple[float, float, float, float] bbox The bounding box, height float the height of the text in pixels
+    :param target_height: target height in pixels
+    :return: ImageFont font The font which will fit, tuple[float, float, float, float] bbox
+        The bounding box, height float the height of the text in pixels
     """
     font_size = initial_size
     font = ImageFont.truetype(font_path, font_size)
     bbox = font.getbbox(text)
     height = bbox[3] - bbox[1]
-    
+
     while height < target_height:
         font_size += 1
         font = ImageFont.truetype(font_path, font_size)
         bbox = font.getbbox(text)
         height = bbox[3] - bbox[1]
-    
+
     return font, bbox, height
 
 
@@ -86,8 +88,9 @@ def create_signum(classification, paasana, font_path, minimum_font_height, width
     :param paasana: three letter word for alphabetical sorting
     :param font_path: path to the font to use
     :param minimum_font_height: minimum font size to use (text will use all the space it can get)
-    :param width: width of the signum in pixels. Note that this has to correspond to brother-ql continous roll widths 
-    :param width: height of the signum in pixels. The minimum value is 42 which corresponds to 9mm. Values less than that are considered to be CD case signums which will result in additional blank space added.
+    :param width: width of the signum in pixels. Note that this has to correspond to brother-ql continous roll widths
+    :param width: height of the signum in pixels. The minimum value is 42 which corresponds to 9mm.
+        Values less than that are considered to be CD case signums which will result in additional blank space added.
     :return: Image the signum image
     """
 
@@ -99,19 +102,27 @@ def create_signum(classification, paasana, font_path, minimum_font_height, width
     if height < 42:
         im_height = height * 5
 
-    image = Image.new('RGB', (width, im_height), color='white')
+    image = Image.new("RGB", (width, im_height), color="white")
     draw = ImageDraw.Draw(image)
 
-    luokitus_font, luokitus_bbox, luokitus_height = get_font_size_for_text(classification, minimum_font_height, font_path, height)
-    paasana_font, paasana_bbox, paasana_height = get_font_size_for_text(paasana, minimum_font_height, font_path, height)
+    luokitus_font, luokitus_bbox, luokitus_height = get_font_size_for_text(
+        classification, minimum_font_height, font_path, height
+    )
+    paasana_font, paasana_bbox, paasana_height = get_font_size_for_text(
+        paasana, minimum_font_height, font_path, height
+    )
 
-    paasana_position = (width - draw.textlength(paasana, font=paasana_font), (im_height - paasana_height) / 2 - paasana_bbox[1])
+    paasana_position = (
+        width - draw.textlength(paasana, font=paasana_font),
+        (im_height - paasana_height) / 2 - paasana_bbox[1],
+    )
     luokitus_position = (0, (im_height - luokitus_height) / 2 - luokitus_bbox[1])
 
-    draw.text(luokitus_position, classification, fill='black', font=luokitus_font)
-    draw.text(paasana_position, paasana, fill='black', font=paasana_font)
-    
+    draw.text(luokitus_position, classification, fill="black", font=luokitus_font)
+    draw.text(paasana_position, paasana, fill="black", font=paasana_font)
+
     return image
+
 
 def build_command_hex(command_code, data):
     """
@@ -126,11 +137,12 @@ def build_command_hex(command_code, data):
     payload = f"{length:04X}{command_code:02X}{data}"
     return f"D6{payload}{crc_ccitt(bytes.fromhex(payload)):04X}"
 
+
 def crc_ccitt(data):
     """
     crc_ccitt Calculates a CCITT CRC checksum for a given string
 
-    :param data: bytearray the data for which the checksum is to be calculated for
+    :param data: bytes the data for which the checksum is to be calculated for
     :return: 4 byte CCITT CRC checksum
     """
 
@@ -147,62 +159,103 @@ def crc_ccitt(data):
             crc &= 0xFFFF
     return crc ^ preset
 
-#FIXME: Implement checksum error checking
+
+# FIXME: Implement checksum error checking
+# FIXME: Return corresponding dataclass instead
 def parseReadVersionResponse(data):
+    """
+    parseReadVersionResponse parses a Version response from reader
+
+    :param data: bytes the data to be parsed
+    :return: dict the parsed data
+    """
     try:
         return {
             "vendor": "3M" if data[6] == 5 else "Unknown",
             "major_value": data[7],
             "minor_value": data[8],
-            "build_version": data[9]
+            "build_version": data[9],
         }
-    except:
+    except Exception:
         return None
 
-#FIXME: Implement checksum error checking
+
+# FIXME: Implement checksum error checking
+# FIXME: Return corresponding dataclass instead
 def parseReadBlockUIDResponse(data):
+    """
+    parseReadVersionResponse parses ReadBlockUID Response response from reader
+
+    :param data: bytes the data to be parsed
+    :return: dict the parsed data
+    """
     try:
         num_tags = data[7]
         tags = []
         for i in range(num_tags):
-            tags.append({
-                "dsfid": data[8 + i*8],
-                "address": data[9 + i*8: 17 + i*8]
-            })
-            
+            tags.append({"dsfid": data[8 + i * 8], "address": data[9 + i * 8 : 17 + i * 8]})
+
         return {
             "errorcode": data[4],
             "afi": data[5],
             "response_options": data[6],
             "num_tags": num_tags,
-            "tags": tags
+            "tags": tags,
         }
-    except:
+    except Exception:
         return None
 
+
+# FIXME: Implement checksum error checking
+# FIXME: Return corresponding dataclass instead
 def parseReadMultiblockResponse(data):
+    """
+    parseReadMultiblockResponse parses ReadMultiblock Response response from reader
+
+    :param data: bytes the data to be parsed
+    :return: dict the parsed data
+    """
     try:
-        data_blocks =  bytes(data[15:47])
+        data_blocks = bytes(data[15:47])
         resp = {
-            "command_code": f'{data[3]:02X}',
-            "error_code":  f'{data[4]:02X}',
-            "address":  data[5:13].hex(),
-            "start_block":  f'{data[13]:02X}',
-            "block_count":  f'{data[14]:02X}',
-            "raw_blocks":  data[15:47],
-            "checksum_match": False
+            "command_code": f"{data[3]:02X}",
+            "error_code": f"{data[4]:02X}",
+            "address": data[5:13].hex(),
+            "start_block": f"{data[13]:02X}",
+            "block_count": f"{data[14]:02X}",
+            "raw_blocks": data[15:47],
+            "checksum_match": False,
         }
-        if bytes.fromhex(build_command_hex(
-            Command.ADDR_READ_MULTIBLOCK.value,
-            f"{resp['error_code']}{resp['address']}{resp['start_block']}{resp['block_count']}{data_blocks.hex()}"
-        )).hex() == data.hex():
+        if (
+            bytes.fromhex(
+                build_command_hex(
+                    Command.ADDR_READ_MULTIBLOCK.value,
+                    (
+                        f"{resp['error_code']}{resp['address']}"
+                        f"{resp['start_block']}{resp['block_count']}"
+                        f"{data_blocks.hex()}"
+                    ),
+                )
+            ).hex()
+            == data.hex()
+        ):
             resp["checksum_match"] = True
         return resp
-    except:
+    except Exception:
         return None
 
-# This function is simply for making the tone of voice of error messages a bit more humane.
+
 def join_with_and(items, last_separator="ja"):
+    """
+    join_with_and takes a list of items, joins them with comma
+        except the last one which is joined with last_separator parameter.
+        If the last separator is "eikä" (nor), it also replaces any negatives.
+
+    :parameter items: array the items to be joined
+    :parameter last_separator:
+    :return: str the resulting string
+
+    """
     if not items:
         return ""
     elif len(items) == 1:
@@ -214,22 +267,42 @@ def join_with_and(items, last_separator="ja"):
             last = items[-1]
         return ", ".join(items[:-1]) + f" {last_separator} " + last
 
+
 class OverallState(Enum):
+    """
+    Application overall states.
+    """
+
     NOT_READY_TO_USE = 0
     READY_TO_USE = 1
     READY_WITH_ERROR = 2
     BATTERY_LOW = 3
 
+
 class BackendState(Enum):
+    """
+    Backend states.
+    """
+
     NO_BACKEND_RESPONSE = 0
     BACKEND_OK = 1
     BACKEND_ERROR = 2
 
+
 class RegistrationState(Enum):
+    """
+    Application registration states.
+    """
+
     REGISTRATION_FAILED = 0
     REGISTRATION_SUCCEEDED = 1
 
+
 class ReaderState(Enum):
+    """
+    RFID reader states.
+    """
+
     NO_READER_CONNECTED = 0
     READER_CONNECTED = 1
     SINGLE_TAG_DETECTED = 2
@@ -239,9 +312,15 @@ class ReaderState(Enum):
     READER_ERROR = 6
     UNKNOWN_TAG = 7
 
+
 class PrinterState(Enum):
+    """
+    Label printer states.
+    """
+
     NO_PRINTER_CONNECTED = 0
     PRINTER_CONNECTED = 1
+
 
 RESPONSE_EMPTY = None
 RESPONSE_READER_READY_1 = bytes.fromhex("d500090400110a05021b972a")
@@ -249,35 +328,32 @@ RESPONSE_READER_READY_2 = bytes.fromhex("d500090400110a050119e23b")
 RESPONSE_NO_TAG_DETECTED = bytes.fromhex("d60007fe00000700af19")
 RESPONSE_SINGLE_TAG_DETECTED = bytes.fromhex("d60007fe0000000126af")
 
-# FIXME: Remove from final. Only for testing low battery state.
-class DummyBattery:
-    percent = 0
-    power_plugged = False
-    def __init__(self, percent, power_plugged):
-        self.percent = percent
-        self.power_plugged = power_plugged
 
 class Backend(QObject):
+    """
+    Labelling application backend which contains event loop and logic.
+    Exposes and emits Qt signals to the Qt Quick UI.
+    """
 
     # FIXME: Load these from configuration file
     print_station_registration_name = "PASILA 01"
     print_station_registration_key = ""
 
     # Signals for updating the UI
-    print_station_registration_name_sig = Signal(str, arguments=['string'])
-    backend_state_sig = Signal(str, arguments=['string'])
-    registration_state_sig = Signal(str, arguments=['string'])
-    reader_state_sig = Signal(str, arguments=['string'])
-    printer_state_sig = Signal(str, arguments=['string'])
-    overall_state_sig = Signal(str, arguments=['string'])
-    message_sig = Signal(str, arguments=['string'])
-    backend_statustext_sig = Signal(str, arguments=['string'])
-    registration_statustext_sig = Signal(str, arguments=['string'])
-    reader_statustext_sig = Signal(str, arguments=['string'])
-    printer_statustext_sig = Signal(str, arguments=['string'])
-    iteration_sig = Signal(int, arguments=['int'])
-    batterypercentage_sig = Signal(int, arguments=['int'])
-    batterycharging_sig = Signal(bool, arguments=['bool'])
+    print_station_registration_name_sig = Signal(str, arguments=["string"])
+    backend_state_sig = Signal(str, arguments=["string"])
+    registration_state_sig = Signal(str, arguments=["string"])
+    reader_state_sig = Signal(str, arguments=["string"])
+    printer_state_sig = Signal(str, arguments=["string"])
+    overall_state_sig = Signal(str, arguments=["string"])
+    message_sig = Signal(str, arguments=["string"])
+    backend_statustext_sig = Signal(str, arguments=["string"])
+    registration_statustext_sig = Signal(str, arguments=["string"])
+    reader_statustext_sig = Signal(str, arguments=["string"])
+    printer_statustext_sig = Signal(str, arguments=["string"])
+    iteration_sig = Signal(int, arguments=["int"])
+    batterypercentage_sig = Signal(int, arguments=["int"])
+    batterycharging_sig = Signal(bool, arguments=["bool"])
 
     # Overall state initialization
     overall_state = OverallState.NOT_READY_TO_USE
@@ -320,16 +396,29 @@ class Backend(QObject):
         self.timer.start()
 
     def send_data(self, data):
+        """
+        send_data sends data to the autoconfigured serial port
+
+        :parameter data: bytes the data to send
+        """
         self.serial_port.write(data)
 
     def read_data(self):
+        """
+        send_data reads data from the autoconfigured serial port
+
+        :return: bytes the read data
+        """
         if self.serial_port.in_waiting > 0:
             data = self.serial_port.read_all()
             return data
         return None
 
-    # FIXME: The reader event loop contains also the UI event loop. Should this code ever be reused, the two need to be separate.
+    # FIXME: The reader event loop is also the UI event loop. Separate for clarity.
     def reader_loop(self):
+        """
+        reader_loop the application event loop
+        """
 
         # Store the previous reader state for use in determining the overall status.
         # Solution for preventing read error scenarios from causing flickering in the UI
@@ -349,7 +438,7 @@ class Backend(QObject):
             self.batterypercentage_sig.emit(battery.percent)
 
         # Autoconfigure printer
-        devices = discover(backend_identifier='pyusb')
+        devices = discover(backend_identifier="pyusb")
         if not devices:
             self.printer_state = PrinterState.NO_PRINTER_CONNECTED
         else:
@@ -364,11 +453,9 @@ class Backend(QObject):
                         # FIXME: Fix Windows-only solution for cross-platform use
                         try:
                             self.serial_port = serial.Serial(
-                                port=f"COM{self.serial_port_number}",
-                                baudrate=19200,
-                                timeout=1
+                                port=f"COM{self.serial_port_number}", baudrate=19200, timeout=1
                             )
-                        except serial.SerialException as e:
+                        except serial.SerialException:
                             if self.serial_port is not None:
                                 self.serial_port.close()
                             self.serial_port = None
@@ -377,21 +464,32 @@ class Backend(QObject):
                             else:
                                 self.serial_port_number = 1
                     else:
-                        # Initialize the reader. For some reason, this command needs to be read from the serial interface immediately.
+                        # Initialize the reader.
+                        # For some reason, this command needs to be read from the serial interface immediately.
                         # Any delay between send and read will cause errors.
-                        self.send_data(bytes.fromhex('D5 00 05 04 00 11 8C 66'))
+                        self.send_data(bytes.fromhex("D5 00 05 04 00 11 8C 66"))
                         response = self.read_data()
-                        if response == RESPONSE_READER_READY_1 or response == RESPONSE_READER_READY_2:
+                        if (
+                            response == RESPONSE_READER_READY_1
+                            or response == RESPONSE_READER_READY_2
+                        ):
                             # 3M Documentation does not say anything about this command
                             # Found via reverse engineering
-                            self.send_data(bytes.fromhex('d60010130601000200030004000b000a00fdbf'))
+                            self.send_data(bytes.fromhex("d60010130601000200030004000b000a00fdbf"))
                             time.sleep(self.reader_wait)
                             self.read_data()
                             # Get reader version
-                            self.send_data(bytes.fromhex(build_command_hex(Command.NORM_READER_VERSION.value,"")))
+                            self.send_data(
+                                bytes.fromhex(
+                                    build_command_hex(Command.NORM_READER_VERSION.value, "")
+                                )
+                            )
                             time.sleep(self.reader_wait)
                             ver = parseReadVersionResponse(self.read_data())
-                            self.reader_version = f"{ver['vendor']} {ver['major_value']}.{ver['minor_value']}.{ver['build_version']}"
+                            self.reader_version = (
+                                f"{ver['vendor']} {ver['major_value']}."
+                                f"{ver['minor_value']}.{ver['build_version']}"
+                            )
                             self.reader_state = ReaderState.READER_CONNECTED
                         else:
                             if response is not None:
@@ -401,7 +499,12 @@ class Backend(QObject):
                             else:
                                 self.reader_state = ReaderState.NO_READER_CONNECTED
 
-                case ReaderState.READER_CONNECTED | ReaderState.MULTIPLE_TAGS_DETECTED | ReaderState.READER_ERROR | ReaderState.UNKNOWN_TAG:
+                case (
+                    ReaderState.READER_CONNECTED
+                    | ReaderState.MULTIPLE_TAGS_DETECTED
+                    | ReaderState.READER_ERROR
+                    | ReaderState.UNKNOWN_TAG
+                ):
                     cmd = build_command_hex(Command.NORM_READ_BLOCK_UID.value, "0007")
                     self.send_data(bytes.fromhex(cmd))
                     time.sleep(self.reader_wait)
@@ -410,11 +513,11 @@ class Backend(QObject):
                         # FIXME: implement logic to handle checksum errors once that's implemented
                         uid_res = parseReadBlockUIDResponse(response)
                         if uid_res is not None:
-                            if(uid_res["num_tags"] == 1 and uid_res["afi"] == 0):
+                            if uid_res["num_tags"] == 1 and uid_res["afi"] == 0:
                                 self.active_address = uid_res["tags"][0]["address"].hex()
                                 self.last_printed_tag = None
                                 self.reader_state = ReaderState.SINGLE_TAG_READ
-                            elif(uid_res["num_tags"] > 1):
+                            elif uid_res["num_tags"] > 1:
                                 self.active_address = None
                                 self.active_tag = None
                                 self.last_printed_tag = None
@@ -425,7 +528,8 @@ class Backend(QObject):
                                 self.last_printed_tag = None
                                 self.reader_state = ReaderState.READER_CONNECTED
                         else:
-                            # The reader responds slowly which means that the response to the command is available at next loop iteration
+                            # The reader responds slowly
+                            # This means that the response to the command is available at next loop iteration
                             # We handle this case simply by dropping to READER_CONNECTED
                             self.active_address = None
                             self.active_tag = None
@@ -439,8 +543,7 @@ class Backend(QObject):
 
                 case ReaderState.SINGLE_TAG_READ:
                     cmd = build_command_hex(
-                        Command.ADDR_READ_MULTIBLOCK.value,
-                        f"{self.active_address}00080c"
+                        Command.ADDR_READ_MULTIBLOCK.value, f"{self.active_address}00080c"
                     )
                     self.send_data(bytes.fromhex(cmd))
                     time.sleep(self.reader_wait)
@@ -449,14 +552,14 @@ class Backend(QObject):
                         response = parseReadMultiblockResponse(resp)
                         if response["checksum_match"]:
                             helmet_rfid_tag = HelmetRfidTag(response["raw_blocks"])
-                            if(helmet_rfid_tag.welformed_data):
+                            if helmet_rfid_tag.welformed_data:
                                 msg = []
                                 msg.append("<p><ul>")
                                 d = helmet_rfid_tag.__dict__
                                 for field in d:
                                     msg.append(f"<li>{field}: {d[field]}</li>")
                                 msg.append("</ul></p>")
-                                self.read_message = "".join(msg)                                
+                                self.read_message = "".join(msg)
                                 self.active_tag = helmet_rfid_tag
                                 self.reader_state = ReaderState.PRINT_TAG
                             else:
@@ -469,39 +572,48 @@ class Backend(QObject):
                             self.active_tag = None
                             self.last_printed_tag = None
                             self.reader_state = ReaderState.READER_ERROR
-                    except:
+                    except Exception:
                         self.reader_state = ReaderState.READER_CONNECTED
 
                 case ReaderState.PRINT_TAG:
-                    if (self.active_tag != self.last_printed_tag) and (self.overall_state == OverallState.READY_TO_USE):
+                    if (self.active_tag != self.last_printed_tag) and (
+                        self.overall_state == OverallState.READY_TO_USE
+                    ):
                         # FIXME: Replace with values fetched from the backend
-                        image = create_signum(classification="78.12345", paasana="KLA", font_path='assets/arial.ttf', minimum_font_height=32, width=413, height=40)
-                        qlr = BrotherQLRaster(self.printer.get('model', 'QL-810W'))
+                        image = create_signum(
+                            classification="78.12345",
+                            paasana="KLA",
+                            font_path="assets/arial.ttf",
+                            minimum_font_height=32,
+                            width=413,
+                            height=40,
+                        )
+                        qlr = BrotherQLRaster(self.printer.get("model", "QL-810W"))
                         qlr.exception_on_warning = False
                         instructions = convert(
                             qlr=qlr,
                             images=[image],
-                            label='38',
-                            rotate='auto',
+                            label="38",
+                            rotate="auto",
                             threshold=70.0,
                             dither=False,
                             compress=True,
                             red=False,
                             dpi_600=False,
-                            hq=False
+                            hq=False,
                         )
                         # Uncomment the line below to show the signum in a window for debugging purposes
                         # image.show()
                         send(
                             instructions=instructions,
-                            printer_identifier=self.printer['identifier'],
-                            backend_identifier=self.printer.get('backend', 'pyusb'),
-                            blocking=False
+                            printer_identifier=self.printer["identifier"],
+                            backend_identifier=self.printer.get("backend", "pyusb"),
+                            blocking=False,
                         )
                     else:
                         # If the tag is the same as the last printed one, do not print it again
                         pass
-                    
+
                     self.last_printed_tag = self.active_tag
                     self.reader_state = ReaderState.SINGLE_TAG_READ
 
@@ -509,7 +621,7 @@ class Backend(QObject):
             # KeyboardInterrupts are ignored
             pass
 
-        except serial.SerialException as e:
+        except serial.SerialException:
             # Occurs when someone unplugs the reader. When it happens, reset the reader state and continue.
             self.serial_port.close()
             self.serial_port = None
@@ -527,40 +639,43 @@ class Backend(QObject):
             pass
 
         # Determine overall state based on battery, backend, registration, reader, and printer states
-        if(battery.percent < 10):
+        if battery.percent < 10:
             self.overall_state = OverallState.BATTERY_LOW
         elif (
-            (self.backend_state == BackendState.BACKEND_OK) and
-            (self.registration_state == RegistrationState.REGISTRATION_SUCCEEDED) and
-            (self.reader_state != ReaderState.NO_READER_CONNECTED) and
-            (self.reader_state != ReaderState.READER_ERROR) and
-            (self.reader_state != ReaderState.MULTIPLE_TAGS_DETECTED) and
-            (self.reader_state != ReaderState.UNKNOWN_TAG) and
-            (previousReaderState != ReaderState.READER_ERROR) and 
-            (previousReaderState != ReaderState.MULTIPLE_TAGS_DETECTED) and
-            (previousReaderState != ReaderState.UNKNOWN_TAG) and
-            (self.printer_state == PrinterState.PRINTER_CONNECTED)
-            ):
+            (self.backend_state == BackendState.BACKEND_OK)
+            and (self.registration_state == RegistrationState.REGISTRATION_SUCCEEDED)
+            and (self.reader_state != ReaderState.NO_READER_CONNECTED)
+            and (self.reader_state != ReaderState.READER_ERROR)
+            and (self.reader_state != ReaderState.MULTIPLE_TAGS_DETECTED)
+            and (self.reader_state != ReaderState.UNKNOWN_TAG)
+            and (previousReaderState != ReaderState.READER_ERROR)
+            and (previousReaderState != ReaderState.MULTIPLE_TAGS_DETECTED)
+            and (previousReaderState != ReaderState.UNKNOWN_TAG)
+            and (self.printer_state == PrinterState.PRINTER_CONNECTED)
+        ):
             self.error_cycles = 0
             self.overall_state = OverallState.READY_TO_USE
         elif (
-            (self.backend_state == BackendState.BACKEND_OK) and
-            (self.registration_state == RegistrationState.REGISTRATION_SUCCEEDED) and
-            (self.reader_state == ReaderState.READER_ERROR or
-             previousReaderState == ReaderState.READER_ERROR or
-             self.reader_state == ReaderState.MULTIPLE_TAGS_DETECTED or
-             previousReaderState == ReaderState.MULTIPLE_TAGS_DETECTED or
-             self.reader_state == ReaderState.UNKNOWN_TAG or
-             previousReaderState == ReaderState.UNKNOWN_TAG
-            ) and
-            (self.printer_state == PrinterState.PRINTER_CONNECTED)
-            ):
+            (self.backend_state == BackendState.BACKEND_OK)
+            and (self.registration_state == RegistrationState.REGISTRATION_SUCCEEDED)
+            and (
+                self.reader_state == ReaderState.READER_ERROR
+                or previousReaderState == ReaderState.READER_ERROR
+                or self.reader_state == ReaderState.MULTIPLE_TAGS_DETECTED
+                or previousReaderState == ReaderState.MULTIPLE_TAGS_DETECTED
+                or self.reader_state == ReaderState.UNKNOWN_TAG
+                or previousReaderState == ReaderState.UNKNOWN_TAG
+            )
+            and (self.printer_state == PrinterState.PRINTER_CONNECTED)
+        ):
             self.error_cycles = 0
             self.overall_state = OverallState.READY_WITH_ERROR
         else:
-            # Allow grace period when transitioning to NOT_READY_TO_USE state to avoid flickering in the UI for brief loss of connectivity
+            # Allow grace period when transitioning to NOT_READY_TO_USE state to avoid flickering in the UI
             # FIXME: Use transition states instead and have specific grace periods for each of them
-            if (self.overall_state == OverallState.READY_TO_USE) and (self.error_cycles < self.error_cycles_grace_period):
+            if (self.overall_state == OverallState.READY_TO_USE) and (
+                self.error_cycles < self.error_cycles_grace_period
+            ):
                 self.error_cycles += 1
                 OverallState.READY_TO_USE
             else:
@@ -584,11 +699,15 @@ class Backend(QObject):
             self.backend_statustext_sig.emit("Ei yhteyttä taustajärjestelmään")
         else:
             self.backend_statustext_sig.emit("Taustajärjestelmävirhe: Ei yhteyttä Sierraan")
-        
+
         if self.registration_state == RegistrationState.REGISTRATION_SUCCEEDED:
-            self.registration_statustext_sig.emit(f"{self.print_station_registration_name}, valtuutus ok")
+            self.registration_statustext_sig.emit(
+                f"{self.print_station_registration_name}, valtuutus ok"
+            )
         else:
-            self.registration_statustext_sig.emit(f"{self.print_station_registration_name}, ei valtuutusta")
+            self.registration_statustext_sig.emit(
+                f"{self.print_station_registration_name}, ei valtuutusta"
+            )
 
         self.reader_statustext_sig.emit(f"RFID-lukija, {self.reader_version}")
 
@@ -600,11 +719,10 @@ class Backend(QObject):
         # Determine the main message to display on the UI. We try to formulate a message using natural language.
         if self.overall_state == OverallState.BATTERY_LOW:
             self.message_sig.emit(
-                "<p><b>Virta vähissä!</b></p>" +
-                "<p>Tietokoneen akku on miltei tyhjä. Tulostus on varmuuden vuoksi kytketty pois päältä.</p>"
-                "<p><b>Ohjeet:</b></p>" +
-                "<p><ul><li>Käy viemässä tietokone lataukseen.</li></ul></p>"
-
+                "<p><b>Virta vähissä!</b></p>"
+                + "<p>Tietokoneen akku on miltei tyhjä. Tulostus on varmuuden vuoksi kytketty pois päältä.</p>"
+                "<p><b>Ohjeet:</b></p>"
+                + "<p><ul><li>Käy viemässä tietokone lataukseen.</li></ul></p>"
             )
         elif self.overall_state == OverallState.NOT_READY_TO_USE:
             positives, negatives, fixes = [], [], []
@@ -621,62 +739,93 @@ class Backend(QObject):
                 fixes.append("<li>Varmista, että toimipaikan verkkoyhteys toimii</li>")
             elif self.backend_state == BackendState.BACKEND_ERROR:
                 negatives.append("taustajärjestelmässä on virhe")
-                fixes.append("<li>Pyydä toimipaikan pääkäyttäjää ilmoittamaan taustajärjestelmän virheestä</li>")
+                fixes.append(
+                    "<li>Pyydä toimipaikan pääkäyttäjää ilmoittamaan taustajärjestelmän virheestä</li>"
+                )
             if self.registration_state == RegistrationState.REGISTRATION_FAILED:
                 negatives.append("tulostusasemalle ei saatu valtuuksia")
                 if self.backend_state is not BackendState.NO_BACKEND_RESPONSE:
-                    fixes.append("<li>Pyydä toimipaikan pääkäyttäjää pyytämään tarroitusasemalle valtuudet</li>")
+                    fixes.append(
+                        "<li>Pyydä toimipaikan pääkäyttäjää pyytämään tarroitusasemalle valtuudet</li>"
+                    )
             if self.reader_state == ReaderState.NO_READER_CONNECTED:
                 negatives.append("RFID-lukijaa ei ole yhdistetty")
-                fixes.append("<li>Varmista, että RFID-lukija on yhdistetty USB-porttiin. Odota kytkemisen jälkeen hetki.</li>")
+                fixes.append(
+                    "<li>Varmista, että RFID-lukija on yhdistetty USB-porttiin. Odota kytkemisen jälkeen hetki.</li>"
+                )
             if self.printer_state == PrinterState.NO_PRINTER_CONNECTED:
                 negatives.append("tulostinta ei löydy")
-                fixes.append("<li>Varmista, että tulostin on yhdistetty USB-porttiin ja päällä</li>")
+                fixes.append(
+                    "<li>Varmista, että tulostin on yhdistetty USB-porttiin ja päällä</li>"
+                )
             conjunction = ""
             if len(positives) > 0 and len(negatives) > 0:
                 conjunction = ", mutta "
             self.message_sig.emit(
-                "<p><b>Tarroja ei voi tulostaa juuri nyt.</b></p>" +
-                f"<p>{join_with_and(positives, "ja").capitalize()}{conjunction}{join_with_and(negatives, "eikä")}.</p>" +
-                f"<p><b>Ohjeet:</b><ul>{"\n".join(fixes)}</ul></p>" if len(fixes) > 0 else ""
+                "<p><b>Tarroja ei voi tulostaa juuri nyt.</b></p>"
+                + "<p>"
+                + f"{join_with_and(positives, "ja").capitalize()}{conjunction}{join_with_and(negatives, "eikä")}."
+                + "</p>"
+                + "<p><b>Ohjeet:</b>"
+                + f"<ul>{"\n".join(fixes)}</ul>"
+                + "</p>"
+                if len(fixes) > 0
+                else ""
             )
         elif self.overall_state == OverallState.READY_WITH_ERROR:
-            if(self.reader_state == ReaderState.MULTIPLE_TAGS_DETECTED):
+            if self.reader_state == ReaderState.MULTIPLE_TAGS_DETECTED:
                 self.message_sig.emit(
-                    "<p><b>Virhetilanne</b></p>" +
-                    "<p>Lukija havaitsee useita niteitä.</p>"
-                    "<p><b>Ohjeet:</b></p>" +
-                    "<p><ul><li>Varmista, että lukijan läheisyydessä ei ole muita niteitä kuin se, jota yrität tarroittaa</li></ul></p>"
+                    "<p><b>Virhetilanne</b></p>"
+                    + "<p>Lukija havaitsee useita niteitä.</p>"
+                    + "<p><b>Ohjeet:</b></p>"
+                    + "<ul>"
+                    + "<li>Varmista, että lukijan läheisyydessä ei ole muita niteitä kuin se, "
+                    + "jota yrität tarroittaa</li>"
+                    + "</ul>"
                 )
-            elif(self.reader_state == ReaderState.UNKNOWN_TAG or previousReaderState == ReaderState.UNKNOWN_TAG):
+            elif (
+                self.reader_state == ReaderState.UNKNOWN_TAG
+                or previousReaderState == ReaderState.UNKNOWN_TAG
+            ):
                 self.message_sig.emit(
-                    "<p><b>Virhetilanne</b></p>" +
-                    "<p>Niteessä on viallinen RFID-tagi. Se pitää vaihtaa ennen signum-tarran tulostamista.</p>"
-                    "<p><b>Ohjeet:</b></p>" +
-                    "<p><ul><li>Laita nide syrjään. Anna vuoron lopuksi kaikki vastaavat niteet kirjastovirkailijalle. Kirjastovirkailija lähettää niteen jatkokäsittelyyn.</li></ul></p>"
+                    "<p><b>Virhetilanne</b></p>"
+                    + "<p>Niteessä on viallinen RFID-tagi. Se pitää vaihtaa ennen signum-tarran tulostamista.</p>"
+                    + "<p><b>Ohjeet:</b></p>"
+                    + "<ul>"
+                    + "<li>Laita nide syrjään. Anna vuoron lopuksi kaikki vastaavat niteet kirjastovirkailijalle. "
+                    + "Kirjastovirkailija lähettää niteen jatkokäsittelyyn.</li>"
+                    + "</ul>"
                 )
             else:
                 self.message_sig.emit(
-                    "<p><b>Virhetilanne</b></p>" +
-                    "<p>Lukija palauttaa virheellisiä lukutuloksia.</p>"
-                    "<p><b>Ohjeet:</b></p>" +
-                    "<p><ul>" +
-                    "<li>Varmista, ettei lukijan läheisyydessä ole radiohäiriötä aiheuttavaa esinettä tai laitetta, esimerkiksi toista RFID-lukijaa.</li>" +
-                    "<li>Varmista, ettei lukijan läheisyydessä ole muita niteitä kuin se, jota yrität tarroittaa</li>" +
-                    "<li>CD, DVD ja Blu-Ray -levyt saattavat myös aiheuttaa häiriöitä. Kokeile kääntää kotelo ympäri tai liikuttaa sitä hitaasti lukijan päällä.</li>" +
-                    "</ul></p>"
+                    "<p><b>Virhetilanne</b></p>"
+                    + "<p>Lukija palauttaa virheellisiä lukutuloksia.</p>"
+                    + "<p><b>Ohjeet:</b></p>"
+                    + "<ul>"
+                    + "<li>Varmista, ettei lukijan läheisyydessä ole radiohäiriötä aiheuttavaa esinettä tai laitetta, "
+                    + "esimerkiksi toista RFID-lukijaa.</li>"
+                    + "<li>Varmista, ettei lukijan läheisyydessä ole muita niteitä kuin se, jota yrität tarroittaa</li>"
+                    + "<li>CD, DVD ja Blu-Ray -levyt saattavat myös aiheuttaa häiriöitä. Kokeile kääntää kotelo ympäri"
+                    + "tai liikuttaa sitä hitaasti lukijan päällä.</li>"
+                    + "</ul>"
                 )
         elif (
-            (self.reader_state == ReaderState.SINGLE_TAG_READ or self.reader_state == ReaderState.PRINT_TAG) and
-            self.active_tag is not None
-            ):
+            self.reader_state == ReaderState.SINGLE_TAG_READ
+            or self.reader_state == ReaderState.PRINT_TAG
+        ) and self.active_tag is not None:
             # FIXME: Replace with the book title
             self.message_sig.emit(f"{self.read_message}")
         else:
             self.message_sig.emit(
-                "<p><b>Valmiina tulostamaan tarroja!</b></p>" +
-                "<p><b>Ohjeet:</b><ol><li>Aseta nide lukutason päälle</li><li>Tulostin tulostaa tarran luettuaan niteen RFID-tunnisteen</li><li>Kiinnitä tarra niteeseen</li></ol>"
+                "<p><b>Valmiina tulostamaan tarroja!</b></p>"
+                + "<p><b>Ohjeet:</b>"
+                + "<ol>"
+                + "<li>Aseta nide lukutason päälle</li>"
+                + "<li>Tulostin tulostaa tarran luettuaan niteen RFID-tunnisteen</li>"
+                + "<li>Kiinnitä tarra niteeseen</li>"
+                + "</ol>"
             )
+
 
 app = QGuiApplication(sys.argv)
 
@@ -691,8 +840,8 @@ backend.reader_loop()
 
 engine = QQmlApplicationEngine()
 engine.quit.connect(app.quit)
-engine.load(':/main.qml')
-engine.rootObjects()[0].setProperty('backend', backend)
+engine.load(":/main.qml")
+engine.rootObjects()[0].setProperty("backend", backend)
 
 for object in engine.rootObjects():
     if object.isWindowType():
