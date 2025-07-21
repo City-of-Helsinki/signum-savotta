@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+
 class SierraItem(BaseModel):
     item_record_id: int
     item_number: str

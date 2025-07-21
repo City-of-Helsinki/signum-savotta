@@ -20,7 +20,7 @@ else
     INTERPRETER=$BIN_DIR/python
 fi
 
-"$BIN_DIR/activate"
+source "$BIN_DIR/activate"
 
 # Install pinned pip first
 pip install -r $(git rev-parse --show-toplevel)/pip-requirements.txt
