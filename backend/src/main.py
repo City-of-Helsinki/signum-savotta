@@ -3,6 +3,7 @@ FastAPI based backend for label printing solution
 """
 
 import asyncio
+import gzip
 import logging
 import os
 import sys
@@ -12,9 +13,10 @@ from typing import Annotated
 
 import pandas as pd
 import uvicorn
-from fastapi import FastAPI, File, Response, UploadFile
+from fastapi import FastAPI, File, Path, Response, UploadFile
 from models.base import Base
 from models.sierra_item import SierraItem
+from schemas import sierra_item_schema
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -40,6 +42,9 @@ engine = create_async_engine(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    FastAPI app lifecycle handling
+    """
     created = False
     while not created:
         try:
@@ -90,6 +95,23 @@ async def get_healthz():
     return Response(status_code=200)
 
 
+@app.get("/itemdata/{barcode}", response_model=sierra_item_schema.SierraItem, tags=["itemdata"])
+async def get_item_data(
+    barcode: str = Path(
+        ..., title="The ID of the item to retrieve", pattern="^[0-9]{14,16}\\w{0,1}$"
+    )
+):
+    """
+    get_item_data
+    """
+    async with async_sessionmaker(autocommit=False, bind=engine)() as session:
+        async with session.begin():
+            result = await session.execute(select(SierraItem).where(SierraItem.barcode == barcode))
+            sierra_item = result.scalars().first()
+            session.expunge_all()
+            return sierra_item
+
+
 @app.get("/sync")
 async def get_sync_configuration():
     """
@@ -104,7 +126,18 @@ async def get_sync_configuration():
             last_synced_id = 0
         logger.info(f"Last synced updated to {last_synced_id} ETL")
 
-        return {"last_synced_id": last_synced_id, "batch_size": 2700}
+        return {"last_synced_id": last_synced_id, "batch_size": 20000}
+
+
+def split_dicts_into_batches(dict_list, fields_per_dict=13, max_fields_per_batch=32767):
+    """
+    split_dicts_into_batches is used to
+    """
+    max_dicts_per_batch = max_fields_per_batch // fields_per_dict
+    return [
+        dict_list[i : i + max_dicts_per_batch]
+        for i in range(0, len(dict_list), max_dicts_per_batch)
+    ]
 
 
 @app.post("/sync")
@@ -114,8 +147,9 @@ async def post_data_sync_batch(file: Annotated[UploadFile, File()]):
     """
     logger.info(f"Received: {file.content_type}, size {file.size}")
     file_content = await file.read()
+    decompressed = gzip.decompress(file_content)
 
-    df = pd.read_csv(BytesIO(file_content), delimiter="\t", header=0, encoding="utf8")
+    df = pd.read_csv(BytesIO(decompressed), delimiter="\t", header=0, encoding="utf8")
     df = df.astype(
         {
             "item_record_id": "Int64",
@@ -129,35 +163,41 @@ async def post_data_sync_batch(file: Annotated[UploadFile, File()]):
             "item_type_name": "string",
             "material_code": "string",
             "material_name": "string",
+            "classification": "string",
             "paasana_json": "string",
         }
     )
     sierra_items = df.to_dict(orient="records")
 
-    upserted = 0
-    # Number of query arguments may not exceed 32767
     try:
         async with async_sessionmaker(autocommit=False, bind=engine)() as session:
-            stmt = insert(SierraItem).values(sierra_items)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=[SierraItem.item_record_id],
-                set_={
-                    col.name: stmt.excluded[col.name]
-                    for col in SierraItem.__table__.columns
-                    if col.name != "item_record_id"
-                },
-            ).returning(SierraItem)
+            async with session.begin():
+                batches = split_dicts_into_batches(
+                    sierra_items, fields_per_dict=13, max_fields_per_batch=32767
+                )
+                for batch in batches:
+                    stmt = insert(SierraItem).values(batch)
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=[SierraItem.item_record_id],
+                        set_={
+                            col.name: stmt.excluded[col.name]
+                            for col in SierraItem.__table__.columns
+                            if col.name != "item_record_id"
+                        },
+                    ).returning(SierraItem)
 
-            orm_stmt = (
-                select(SierraItem).from_statement(stmt).execution_options(populate_existing=True)
-            )
+                    orm_stmt = (
+                        select(SierraItem)
+                        .from_statement(stmt)
+                        .execution_options(populate_existing=True)
+                    )
 
-            await session.execute(orm_stmt)
-            await session.commit()
+                    await session.execute(orm_stmt)
+                await session.commit()
     except Exception as e:
         logger.error(e)
 
-    return {"upserted": upserted}
+    return {"upserted": len(sierra_items)}
 
 
 log_config = uvicorn.config.LOGGING_CONFIG

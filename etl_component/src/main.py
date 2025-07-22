@@ -3,8 +3,10 @@ Scheduled ETL task to preload item data from SierraDNA database to signum label 
 """
 
 import asyncio
+import gzip
 import logging
 import os
+import sys
 from io import StringIO
 
 import httpx
@@ -13,9 +15,14 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("feedgen.stdout")
+logger.setLevel(logging.getLevelName(os.getenv("LOG_LEVEL", default="DEBUG")))
+stream_handler = logging.StreamHandler(sys.stdout)
+log_formatter = logging.Formatter(
+    "%(asctime)s [%(levelname)s] [%(processName)s: %(process)d] [%(threadName)s: %(thread)d] %(name)s: %(message)s"
+)
+stream_handler.setFormatter(log_formatter)
+logger.addHandler(stream_handler)
 
 # Configuration
 BACKEND_URL = os.getenv("BACKEND_URL")
@@ -95,11 +102,21 @@ raw_subfields AS (
                 'tag', tag,
                 'content', content
             )
-        ) AS paasana_json,
-        string_agg(content, ' ') AS raw_data
+        ) AS paasana_json
     FROM sierra_view.subfield
     WHERE
         (marc_tag = '100' OR marc_tag = '110' OR marc_tag = '111' OR marc_tag = '130' OR marc_tag = '245')
+        AND record_id IN (SELECT bib_item_link.bib_record_id from bib_item_link)
+    GROUP BY record_id
+    ORDER BY record_id ASC
+),
+classification AS (
+    SELECT
+        record_id,
+        MAX(content) AS classification
+    FROM sierra_view.subfield
+    WHERE
+        marc_tag = '097'
         AND record_id IN (SELECT bib_item_link.bib_record_id from bib_item_link)
     GROUP BY record_id
     ORDER BY record_id ASC
@@ -116,6 +133,7 @@ SELECT
     itype_property_myuser.name as item_type_name,
     bib_record_property.material_code,
     material_property_myuser.name as material_name,
+    classification.classification,
     raw_subfields.paasana_json
 FROM
     item
@@ -126,6 +144,7 @@ LEFT JOIN bib_item_link ON item.record_id = bib_item_link.item_record_id
 LEFT JOIN bib_number ON bib_item_link.bib_record_id = bib_number.id
 LEFT JOIN bib_record_property ON bib_item_link.bib_record_id = bib_record_property.bib_record_id
 LEFT JOIN material_property_myuser ON bib_record_property.material_code = material_property_myuser.code
+LEFT JOIN classification ON classification.record_id = bib_item_link.bib_record_id
 LEFT JOIN raw_subfields ON raw_subfields.record_id = bib_item_link.bib_record_id
 ORDER BY item_record_id"""
 
@@ -140,15 +159,16 @@ async def task():
         echo=False,
     )
     try:
-        async with httpx.AsyncClient() as client:
-            config_response = await client.get(f"{BACKEND_URL}/sync")
-            config = config_response.json()
-            last_synced_id = config.get("last_synced_id")
-            batch_size = config.get("batch_size")
-            if last_synced_id is None or batch_size is None:
-                logger.error("Missing sync parameters in config response.")
-                return
-            async with async_sessionmaker(autocommit=False, bind=engine)() as session:
+        async with async_sessionmaker(autocommit=False, bind=engine)() as session:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                config_response = await client.get(f"{BACKEND_URL}/sync")
+                config = config_response.json()
+                last_synced_id = config.get("last_synced_id")
+                batch_size = config.get("batch_size")
+                if last_synced_id is None or batch_size is None:
+                    logger.error("Missing sync parameters in config response.")
+                    return
+            async with session.begin():
                 result = await session.execute(
                     text(sql_query).bindparams(
                         bindparam("last_synced_id", value=last_synced_id),
@@ -169,6 +189,7 @@ async def task():
                         "item_type_name": "string",
                         "material_code": "string",
                         "material_name": "string",
+                        "classification": "string",
                         "paasana_json": "string",
                     }
                 )
@@ -177,28 +198,32 @@ async def task():
                 tsv_buffer.seek(0)
                 files = {
                     "file": (
-                        "data.tsv",
-                        tsv_buffer.getvalue().encode("utf-8"),
-                        "text/tab-separated-values",
+                        "data.tsv.gz",
+                        gzip.compress(tsv_buffer.getvalue().encode("utf-8")),
+                        "application/gzip",
                     )
                 }
-                post_response = await client.post(f"{BACKEND_URL}/sync", files=files)
-                logger.info(f"{post_response.json()}")
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    post_response = await client.post(f"{BACKEND_URL}/sync", files=files)
+                    logger.info(f"{post_response.json()}")
                 await session.close()
-        await engine.dispose()
+            await engine.dispose()
     except Exception as e:
+        await engine.dispose()
         logger.exception(f"Error during task: {e}")
 
 
 # Main entry point
 async def main():
-    scheduler = AsyncIOScheduler()
+    scheduler = AsyncIOScheduler(job_defaults={"coalesce": True, "max_instances": 1})
     scheduler.add_job(task, "interval", seconds=30)
     scheduler.start()
+    try:
+        while True:
+            await asyncio.sleep(3600)  # Keeps the loop alive
 
-    # Keep the script running
-    while True:
-        await asyncio.sleep(30)
+    except (KeyboardInterrupt, SystemExit):
+        scheduler.shutdown()
 
 
 if __name__ == "__main__":

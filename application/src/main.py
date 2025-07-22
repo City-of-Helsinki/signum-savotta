@@ -9,6 +9,7 @@ import traceback
 from enum import Enum
 
 import assets_rc  # noqa: F401
+import httpx
 import psutil
 import serial
 from brother_ql.backends.helpers import discover, send
@@ -369,6 +370,7 @@ class Backend(QObject):
     reader_state = ReaderState.NO_READER_CONNECTED
     active_address = None
     active_tag = None
+    active_item = None
     last_printed_tag = None
     serial_port_number = 1
     serial_port = None
@@ -553,15 +555,26 @@ class Backend(QObject):
                         if response["checksum_match"]:
                             helmet_rfid_tag = HelmetRfidTag(response["raw_blocks"])
                             if helmet_rfid_tag.welformed_data:
+                                self.active_tag = helmet_rfid_tag
+
+                                self.reader_state = ReaderState.PRINT_TAG
+                                """
+                                response = httpx.get(
+                                    f"http://127.0.0.1:8000/itemdata/{helmet_rfid_tag.primary_item_identifier}"
+                                )
+                        
+                                self.active_item = response.json()"""
                                 msg = []
                                 msg.append("<p><ul>")
                                 d = helmet_rfid_tag.__dict__
                                 for field in d:
                                     msg.append(f"<li>{field}: {d[field]}</li>")
+                                """
+                                for field in self.active_item:
+                                    msg.append(f"<li>{field}: {self.active_item[field]}</li>")
+                                """
                                 msg.append("</ul></p>")
                                 self.read_message = "".join(msg)
-                                self.active_tag = helmet_rfid_tag
-                                self.reader_state = ReaderState.PRINT_TAG
                             else:
                                 self.reader_state = ReaderState.UNKNOWN_TAG
                         elif response["command_code"] == "FE":
@@ -581,8 +594,8 @@ class Backend(QObject):
                     ):
                         # FIXME: Replace with values fetched from the backend
                         image = create_signum(
-                            classification="78.12345",
-                            paasana="KLA",
+                            classification="84.2",  # self.active_item["classification"],
+                            paasana="ygy",  # self.active_item["paasana"],
                             font_path="assets/arial.ttf",
                             minimum_font_height=32,
                             width=413,
@@ -603,13 +616,15 @@ class Backend(QObject):
                             hq=False,
                         )
                         # Uncomment the line below to show the signum in a window for debugging purposes
-                        # image.show()
+                        image.show()
+                        """
                         send(
                             instructions=instructions,
                             printer_identifier=self.printer["identifier"],
                             backend_identifier=self.printer.get("backend", "pyusb"),
                             blocking=False,
                         )
+                        """
                     else:
                         # If the tag is the same as the last printed one, do not print it again
                         pass
