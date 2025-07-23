@@ -8,20 +8,23 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime
 from io import BytesIO
 from typing import Annotated
 
 import pandas as pd
 import uvicorn
-from fastapi import FastAPI, File, Path, Response, UploadFile
+from fastapi import FastAPI, File, Form, Path, Response, UploadFile
+from models.backend_state import BackendState, SyncMode, SyncStatus
 from models.base import Base
 from models.sierra_item import SierraItem
 from schemas import sierra_item_schema
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.inspection import inspect
 
-logger = logging.getLogger("feedgen.stdout")
+logger = logging.getLogger("backend.stdout")
 logger.setLevel(logging.getLevelName(os.getenv("LOG_LEVEL", default="DEBUG")))
 stream_handler = logging.StreamHandler(sys.stdout)
 log_formatter = logging.Formatter(
@@ -30,6 +33,7 @@ log_formatter = logging.Formatter(
 stream_handler.setFormatter(log_formatter)
 logger.addHandler(stream_handler)
 
+FULL_SYNC_BATCH_SIZE = 100000
 
 engine = create_async_engine(
     (
@@ -45,16 +49,36 @@ async def lifespan(app: FastAPI):
     """
     FastAPI app lifecycle handling
     """
-    created = False
-    while not created:
+    database_available = False
+    while not database_available:
         try:
             async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.drop_all)
+                # await conn.run_sync(Base.metadata.drop_all)
                 await conn.run_sync(Base.metadata.create_all)
-            created = True
+                database_available = True
         except Exception as e:
             logger.error(e)
             await asyncio.sleep(10)
+
+    async with async_sessionmaker(engine)() as session:
+        async with session.begin():
+            result = await session.execute(select(BackendState))
+            backend_state: BackendState = result.first()
+            if not backend_state:
+                initial_state = BackendState(
+                    initialized_at=datetime.now(),
+                    sync_mode=SyncMode.SYNC_FULL,
+                    sync_status=SyncStatus.IDLE,
+                )
+                backend_state = await BackendState.upsert_singleton(
+                    session=session, instance=initial_state
+                )
+                logger.info("Initialized persistent backend state.")
+            state_str = ", ".join(
+                f"{attr.key}: {getattr(backend_state, attr.key)}"
+                for attr in inspect(BackendState).attrs
+            )
+            logger.info(("Persistent backend state: " f"{state_str}"))
 
     yield
     await engine.dispose()
@@ -107,7 +131,7 @@ async def get_item_data(
     async with async_sessionmaker(autocommit=False, bind=engine)() as session:
         async with session.begin():
             result = await session.execute(select(SierraItem).where(SierraItem.barcode == barcode))
-            sierra_item = result.scalars().first()
+            sierra_item = result.scalar_one_or_none()
             session.expunge_all()
             return sierra_item
 
@@ -119,14 +143,42 @@ async def get_sync_configuration():
     """
     last_synced_id = 0
     async with async_sessionmaker(autocommit=False, bind=engine)() as session:
-        stmt = select(func.max(SierraItem.item_record_id))
-        result = await session.execute(stmt)
-        last_synced_id = result.scalar()
-        if last_synced_id is None:
-            last_synced_id = 0
-        logger.info(f"Last synced updated to {last_synced_id} ETL")
-
-        return {"last_synced_id": last_synced_id, "batch_size": 20000}
+        async with session.begin():
+            result = await session.execute(select(BackendState))
+            backend_state: BackendState = result.scalar_one()
+            if backend_state.sync_mode == SyncMode.SYNC_FULL:
+                result = await session.execute(select(func.max(SierraItem.item_record_id)))
+                last_synced_id = result.scalar_one_or_none()
+                if last_synced_id is None:
+                    last_synced_id = 0
+                logger.info(
+                    (
+                        f"{backend_state.sync_mode} with batch_size: "
+                        f"{FULL_SYNC_BATCH_SIZE}, last_synced_id: {last_synced_id}"
+                    )
+                )
+                return {
+                    "sync_mode": backend_state.sync_mode,
+                    "sync_status": backend_state.sync_status,
+                    "batch_size": FULL_SYNC_BATCH_SIZE,
+                    "last_synced_id": last_synced_id,
+                }
+            elif backend_state.sync_mode == SyncMode.SYNC_CHANGES:
+                logger.info(
+                    f"{backend_state.sync_mode} with timestamp: {backend_state.sync_changes_since}"
+                )
+                return {
+                    "sync_mode": backend_state.sync_mode,
+                    "sync_status": backend_state.sync_status,
+                    "timestamp": backend_state.sync_changes_since,
+                }
+            else:
+                state_str = ", ".join(
+                    f"{attr.key}: {getattr(backend_state, attr.key)}"
+                    for attr in inspect(BackendState).attrs
+                )
+                logger.error(("Error fetching sync configuration, state: " f"{state_str}"))
+                return {}
 
 
 def split_dicts_into_batches(dict_list, fields_per_dict=13, max_fields_per_batch=32767):
@@ -141,7 +193,9 @@ def split_dicts_into_batches(dict_list, fields_per_dict=13, max_fields_per_batch
 
 
 @app.post("/sync")
-async def post_data_sync_batch(file: Annotated[UploadFile, File()]):
+async def post_data_sync_batch(
+    file: Annotated[UploadFile, File()], timestamp: Annotated[str, Form()]
+):
     """
     post_data_sync_batch
     """
@@ -149,9 +203,12 @@ async def post_data_sync_batch(file: Annotated[UploadFile, File()]):
     file_content = await file.read()
     decompressed = gzip.decompress(file_content)
 
-    df = pd.read_csv(BytesIO(decompressed), delimiter="\t", header=0, encoding="utf8")
-    df = df.astype(
-        {
+    df = pd.read_csv(
+        BytesIO(decompressed),
+        delimiter="\t",
+        header=0,
+        encoding="utf8",
+        dtype={
             "item_record_id": "Int64",
             "item_number": "string",
             "barcode": "string",
@@ -165,13 +222,19 @@ async def post_data_sync_batch(file: Annotated[UploadFile, File()]):
             "material_name": "string",
             "classification": "string",
             "paasana_json": "string",
-        }
+        },
     )
     sierra_items = df.to_dict(orient="records")
 
     try:
         async with async_sessionmaker(autocommit=False, bind=engine)() as session:
             async with session.begin():
+                backend_state: BackendState = await BackendState.upsert_singleton(
+                    session=session,
+                    instance=BackendState(
+                        sync_status=SyncStatus.PROCESSING_SYNC_BATCH,
+                    ),
+                )
                 batches = split_dicts_into_batches(
                     sierra_items, fields_per_dict=13, max_fields_per_batch=32767
                 )
@@ -185,17 +248,47 @@ async def post_data_sync_batch(file: Annotated[UploadFile, File()]):
                             if col.name != "item_record_id"
                         },
                     ).returning(SierraItem)
-
                     orm_stmt = (
                         select(SierraItem)
                         .from_statement(stmt)
                         .execution_options(populate_existing=True)
                     )
-
                     await session.execute(orm_stmt)
+                if backend_state.sync_mode == SyncMode.SYNC_FULL:
+                    if len(sierra_items) < FULL_SYNC_BATCH_SIZE:
+                        await BackendState.upsert_singleton(
+                            session=session,
+                            instance=BackendState(
+                                sync_mode=SyncMode.SYNC_CHANGES,
+                                sync_status=SyncStatus.IDLE,
+                                sync_changes_since=datetime.now(),
+                                full_sync_completed_at=datetime.now(),
+                                last_sync_run_completed_at=datetime.now(),
+                            ),
+                        )
+                    else:
+                        await BackendState.upsert_singleton(
+                            session=session,
+                            instance=BackendState(
+                                sync_status=SyncStatus.IDLE,
+                                last_sync_run_completed_at=datetime.now(),
+                            ),
+                        )
+                elif backend_state.sync_mode == SyncMode.SYNC_CHANGES:
+                    await BackendState.upsert_singleton(
+                        session=session,
+                        instance=BackendState(
+                            sync_status=SyncStatus.IDLE,
+                            last_sync_run_completed_at=datetime.now(),
+                            sync_changes_since=datetime.fromisoformat(timestamp),
+                        ),
+                    )
+                else:
+                    raise ValueError("Backend state error, sync_mode")
                 await session.commit()
     except Exception as e:
         logger.error(e)
+        return {"error": f"{e}"}
 
     return {"upserted": len(sierra_items)}
 

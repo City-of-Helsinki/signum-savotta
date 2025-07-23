@@ -53,7 +53,7 @@ class SierraItem(Base):
     item_type_name: Mapped[Optional[str]] = mapped_column("item_type_name", String(255))
     material_code: Mapped[Optional[str]] = mapped_column("material_code", String(3))
     material_name: Mapped[Optional[str]] = mapped_column("material_name", String(255))
-    classification: Mapped[Optional[str]] = mapped_column("classification", String(16))
+    classification: Mapped[Optional[str]] = mapped_column("classification", Text)
     paasana_json: Mapped[Optional[str]] = mapped_column("paasana_json", JSON)
 
     @hybrid_property

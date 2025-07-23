@@ -2,24 +2,42 @@
 SQLAlchemy model for backend application state persistence
 """
 
+import enum
 from datetime import datetime
 from typing import Optional, Self
 
 from models.base import Base
 from sqlalchemy import (
-    BigInteger,
     Boolean,
     Column,
     Computed,
     DateTime,
+    Enum,
     Integer,
     select,
     update,
 )
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Mapped, mapped_column
+
+
+class SyncMode(enum.Enum):
+    """
+    SyncMode
+    """
+
+    SYNC_FULL = "sync_full"
+    SYNC_CHANGES = "sync_changes"
+
+
+class SyncStatus(enum.Enum):
+    """
+    SyncStatus
+    """
+
+    IDLE = "idle"
+    PROCESSING_SYNC_BATCH = "processing_sync_batch"
 
 
 class BackendState(Base):
@@ -32,41 +50,44 @@ class BackendState(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     lock = Column(Boolean, Computed("TRUE", persisted=True), unique=True)
 
-    initial_sync_complete: Mapped[Optional[bool]] = mapped_column("initial_sync_complete", Boolean)
-    start_next_sync_from_zero: Mapped[Optional[bool]] = mapped_column(
-        "start_next_sync_from_zero", Boolean
+    initialized_at: Mapped[Optional[datetime]] = mapped_column("initialized_at", DateTime)
+
+    sync_mode: Mapped[Optional[SyncMode]] = mapped_column("sync_mode", Enum(SyncMode))
+    sync_status: Mapped[Optional[SyncStatus]] = mapped_column("sync_status", Enum(SyncStatus))
+
+    full_sync_completed_at: Mapped[Optional[datetime]] = mapped_column(
+        "full_sync_completed_at", DateTime
     )
-    last_sync_complete: Mapped[Optional[datetime]] = mapped_column("last_sync_completed", DateTime)
-    last_full_sync_completed: Mapped[Optional[datetime]] = mapped_column(
-        "last_full_sync_completed", DateTime
-    )
-    last_synced_sierra_item_id: Mapped[Optional[int]] = mapped_column(
-        "last_synced_sierra_item_id", BigInteger
+
+    sync_changes_since: Mapped[Optional[datetime]] = mapped_column("sync_changes_since", DateTime)
+
+    last_sync_run_completed_at: Mapped[Optional[datetime]] = mapped_column(
+        "last_sync_run_completed_at", DateTime
     )
 
     @classmethod
     async def upsert_singleton(cls, session: AsyncSession, instance: Self) -> Self:
-        try:
-            async with session.begin():
-                session.add(instance)
-        except IntegrityError:
-            await session.rollback()
+        """
+        upsert_singleton
+        """
+        result = await session.execute(select(cls))
+        value: Self = result.scalar_one_or_none()
+        if not value:
+            session.add(instance)
+        else:
             mapper = inspect(cls)
             values = {
                 attr.key: getattr(instance, attr.key)
                 for attr in mapper.attrs
                 if attr.key not in ("id", "lock") and getattr(instance, attr.key) is not None
             }
-
             if values:
-                async with session.begin():
-                    stmt = (
-                        update(cls)
-                        .where(cls.lock == True)  # noqa
-                        .values(**values)
-                        .execution_options(synchronize_session="fetch")
-                    )
-                    await session.execute(stmt)
-        async with session.begin():
-            result = await session.execute(select(cls).where(cls.lock == True))  # noqa
-            return result.scalar_one()
+                stmt = (
+                    update(cls)
+                    .where(cls.lock == True)  # noqa
+                    .values(**values)
+                    .execution_options(synchronize_session="fetch")
+                )
+                await session.execute(stmt)
+        result = await session.execute(select(cls).where(cls.lock == True))  # noqa
+        return result.scalar_one()
