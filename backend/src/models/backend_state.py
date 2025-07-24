@@ -50,19 +50,23 @@ class BackendState(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     lock = Column(Boolean, Computed("TRUE", persisted=True), unique=True)
 
-    initialized_at: Mapped[Optional[datetime]] = mapped_column("initialized_at", DateTime)
+    initialized_at: Mapped[Optional[datetime]] = mapped_column(
+        "initialized_at", DateTime(timezone=True)
+    )
 
     sync_mode: Mapped[Optional[SyncMode]] = mapped_column("sync_mode", Enum(SyncMode))
     sync_status: Mapped[Optional[SyncStatus]] = mapped_column("sync_status", Enum(SyncStatus))
 
     full_sync_completed_at: Mapped[Optional[datetime]] = mapped_column(
-        "full_sync_completed_at", DateTime
+        "full_sync_completed_at", DateTime(timezone=True)
     )
 
-    sync_changes_since: Mapped[Optional[datetime]] = mapped_column("sync_changes_since", DateTime)
+    sync_changes_since: Mapped[Optional[datetime]] = mapped_column(
+        "sync_changes_since", DateTime(timezone=True)
+    )
 
     last_sync_run_completed_at: Mapped[Optional[datetime]] = mapped_column(
-        "last_sync_run_completed_at", DateTime
+        "last_sync_run_completed_at", DateTime(timezone=True)
     )
 
     @classmethod

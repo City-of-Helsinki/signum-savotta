@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from io import BytesIO
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import uvicorn
@@ -34,6 +35,8 @@ stream_handler.setFormatter(log_formatter)
 logger.addHandler(stream_handler)
 
 FULL_SYNC_BATCH_SIZE = 100000
+
+local_timezone = ZoneInfo("localtime")
 
 engine = create_async_engine(
     (
@@ -63,10 +66,10 @@ async def lifespan(app: FastAPI):
     async with async_sessionmaker(engine)() as session:
         async with session.begin():
             result = await session.execute(select(BackendState))
-            backend_state: BackendState = result.first()
+            backend_state: BackendState = result.scalar_one_or_none()
             if not backend_state:
                 initial_state = BackendState(
-                    initialized_at=datetime.now(),
+                    initialized_at=datetime.now(local_timezone),
                     sync_mode=SyncMode.SYNC_FULL,
                     sync_status=SyncStatus.IDLE,
                 )
@@ -170,7 +173,7 @@ async def get_sync_configuration():
                 return {
                     "sync_mode": backend_state.sync_mode,
                     "sync_status": backend_state.sync_status,
-                    "timestamp": backend_state.sync_changes_since,
+                    "timestamp": backend_state.sync_changes_since.isoformat(),
                 }
             else:
                 state_str = ", ".join(
@@ -181,7 +184,7 @@ async def get_sync_configuration():
                 return {}
 
 
-def split_dicts_into_batches(dict_list, fields_per_dict=13, max_fields_per_batch=32767):
+def split_dicts_into_batches(dict_list, fields_per_dict=14, max_fields_per_batch=32767):
     """
     split_dicts_into_batches is used to
     """
@@ -199,7 +202,10 @@ async def post_data_sync_batch(
     """
     post_data_sync_batch
     """
-    logger.info(f"Received: {file.content_type}, size {file.size}")
+
+    etl_timestamp = datetime.fromisoformat(timestamp)
+
+    logger.info(f"Received: {file.content_type}, size {file.size}. ETL timestamp: {etl_timestamp}")
     file_content = await file.read()
     decompressed = gzip.decompress(file_content)
 
@@ -224,19 +230,18 @@ async def post_data_sync_batch(
             "paasana_json": "string",
         },
     )
+    df["updated_at"] = pd.Timestamp(etl_timestamp)
     sierra_items = df.to_dict(orient="records")
 
     try:
         async with async_sessionmaker(autocommit=False, bind=engine)() as session:
             async with session.begin():
-                backend_state: BackendState = await BackendState.upsert_singleton(
-                    session=session,
-                    instance=BackendState(
-                        sync_status=SyncStatus.PROCESSING_SYNC_BATCH,
-                    ),
-                )
+                result = await session.execute(select(BackendState))
+                backend_state: BackendState = result.scalar_one()
+
+                # FIXME: Move batch upsert completely to SierraItem and get rid of hardcoded fields
                 batches = split_dicts_into_batches(
-                    sierra_items, fields_per_dict=13, max_fields_per_batch=32767
+                    sierra_items, fields_per_dict=14, max_fields_per_batch=32767
                 )
                 for batch in batches:
                     stmt = insert(SierraItem).values(batch)
@@ -255,32 +260,31 @@ async def post_data_sync_batch(
                     )
                     await session.execute(orm_stmt)
                 if backend_state.sync_mode == SyncMode.SYNC_FULL:
+                    first_etl = etl_timestamp if not backend_state.sync_changes_since else None
                     if len(sierra_items) < FULL_SYNC_BATCH_SIZE:
                         await BackendState.upsert_singleton(
                             session=session,
                             instance=BackendState(
                                 sync_mode=SyncMode.SYNC_CHANGES,
-                                sync_status=SyncStatus.IDLE,
-                                sync_changes_since=datetime.now(),
-                                full_sync_completed_at=datetime.now(),
-                                last_sync_run_completed_at=datetime.now(),
+                                sync_changes_since=first_etl,
+                                full_sync_completed_at=datetime.now(local_timezone),
+                                last_sync_run_completed_at=datetime.now(local_timezone),
                             ),
                         )
                     else:
                         await BackendState.upsert_singleton(
                             session=session,
                             instance=BackendState(
-                                sync_status=SyncStatus.IDLE,
-                                last_sync_run_completed_at=datetime.now(),
+                                sync_changes_since=first_etl,
+                                last_sync_run_completed_at=datetime.now(local_timezone),
                             ),
                         )
                 elif backend_state.sync_mode == SyncMode.SYNC_CHANGES:
                     await BackendState.upsert_singleton(
                         session=session,
                         instance=BackendState(
-                            sync_status=SyncStatus.IDLE,
-                            last_sync_run_completed_at=datetime.now(),
-                            sync_changes_since=datetime.fromisoformat(timestamp),
+                            last_sync_run_completed_at=datetime.now(local_timezone),
+                            sync_changes_since=etl_timestamp,
                         ),
                     )
                 else:
@@ -298,7 +302,16 @@ log_config["formatters"]["default"]["fmt"] = log_formatter._fmt
 log_config["formatters"]["access"]["fmt"] = log_formatter._fmt
 
 
-config = uvicorn.Config(app=app, host="0.0.0.0", port=8000, log_config=log_config, workers=4)
+config = uvicorn.Config(
+    app=app,
+    host="0.0.0.0",
+    port=8000,
+    log_config=log_config,
+    workers=4,
+    timeout_keep_alive=60,
+    timeout_notify=60,
+    timeout_graceful_shutdown=120,
+)
 server = uvicorn.Server(config=config)
 
 

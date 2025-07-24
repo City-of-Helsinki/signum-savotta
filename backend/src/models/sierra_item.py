@@ -4,13 +4,17 @@ SQLAlchemy model for item data synchronized from Sierra via ETL component
 
 import json
 import logging
-from typing import Optional
+from datetime import datetime
+from typing import List, Optional
 
 import regex
 import uroman as ur
 from models.base import Base
-from sqlalchemy import JSON, BigInteger, Index, SmallInteger, String, Text
+from sqlalchemy import JSON, BigInteger, DateTime, Index, SmallInteger, String, Text
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Mapped, mapped_column
 
 uroman = ur.Uroman()
@@ -55,6 +59,7 @@ class SierraItem(Base):
     material_name: Mapped[Optional[str]] = mapped_column("material_name", String(255))
     classification: Mapped[Optional[str]] = mapped_column("classification", Text)
     paasana_json: Mapped[Optional[str]] = mapped_column("paasana_json", JSON)
+    updated_at: Mapped[datetime] = mapped_column("updated_at", DateTime(timezone=True))
 
     @hybrid_property
     def paasana(self) -> str:
@@ -114,3 +119,28 @@ class SierraItem(Base):
                 return signumize(field["content"], 0)
 
         return "***"
+
+    @classmethod
+    async def upsert_dicts_batch(cls, session: AsyncSession, dicts: List[dict]):
+        """
+        upsert_dicts_batch
+        """
+
+        mapper = inspect(cls)
+        max_dicts_per_batch = 32767 // len(mapper.attrs)
+        batches = [
+            dicts[i : i + max_dicts_per_batch] for i in range(0, len(dicts), max_dicts_per_batch)
+        ]
+
+        for batch in batches:
+            stmt = insert(cls).values(batch)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[SierraItem.item_record_id],
+                set_={
+                    col.name: stmt.excluded[col.name]
+                    for col in cls.__table__.columns
+                    if col.name != "item_record_id"
+                },
+            ).returning(cls)
+            orm_stmt = select(cls).from_statement(stmt).execution_options(populate_existing=True)
+            await session.execute(orm_stmt)

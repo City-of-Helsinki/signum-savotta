@@ -7,13 +7,14 @@ import gzip
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import StringIO
+from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import bindparam, text
+from sqlalchemy import BigInteger, bindparam, func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 logger = logging.getLogger("etl.stdout")
@@ -27,6 +28,9 @@ logger.addHandler(stream_handler)
 
 # Configuration
 BACKEND_URL = os.getenv("BACKEND_URL")
+MAX_SYNC_DELTA_MINUTES = 60
+
+local_timezone = ZoneInfo("localtime")
 
 full_sync_sql_query = """WITH
 item AS (
@@ -157,18 +161,22 @@ updated AS (
     FROM
         sierra_view.record_metadata
     WHERE
-        record_last_updated_gmt >= :timestamp
+        record_last_updated_gmt AT TIME ZONE current_setting('timezone') >= :timestamp
     AND (record_type_code = 'b' OR record_type_code = 'i')
 ),
 bib_item_link AS (
     SELECT
-        bib_record_id,
-        item_record_id
+        item_record_id,
+        MAX(bib_record_id) AS bib_record_id
     FROM
         sierra_view.bib_record_item_record_link
     WHERE
         item_record_id IN (SELECT id FROM updated WHERE record_type_code = 'i')
         OR bib_record_id IN (SELECT id FROM updated WHERE record_type_code = 'b')
+    GROUP BY
+        item_record_id
+    ORDER BY
+        item_record_id
 ),
 item_record_property AS (
     SELECT
@@ -267,11 +275,7 @@ SELECT
     classification.classification,
     raw_subfields.paasana_json
 FROM
-    updated
-LEFT JOIN bib_item_link ON 
-        (updated.record_type_code = 'i' AND updated.id = bib_item_link.item_record_id)
-        OR
-        (updated.record_type_code = 'b' AND updated.id = bib_item_link.bib_record_id)
+    bib_item_link
 LEFT JOIN item_record_property ON bib_item_link.item_record_id = item_record_property.item_record_id
 LEFT JOIN item ON item.record_id = bib_item_link.item_record_id
 LEFT JOIN itype_property_myuser ON item.itype_code_num = itype_property_myuser.code
@@ -295,6 +299,7 @@ async def task():
     engine = None
     try:
         config = None
+        # FIXME: Handling HTTP timeouts and unreachable Sierra DB gracefully.
         async with httpx.AsyncClient(timeout=4.0) as client:
             config_response = await client.get(f"{BACKEND_URL}/sync")
             config = config_response.json()
@@ -306,7 +311,10 @@ async def task():
                     )
                     return
                 elif config.get("sync_type") == "sync_full":
-                    if config.get("last_synced_id") is None or config.get("batch_size") is None:
+                    try:
+                        int(config.get("last_synced_id"))
+                        int(config.get("batch_size"))
+                    except Exception:
                         logger.error(
                             (
                                 "sync_full with faulty parameters: "
@@ -327,7 +335,7 @@ async def task():
                         )
                         return
             except Exception:
-                logger.error("Unrecognized sync configuration.")
+                logger.error(f"Unrecognized sync configuration {config}.")
                 return
         if config:
             engine = create_async_engine(
@@ -340,19 +348,47 @@ async def task():
 
             async with async_sessionmaker(autocommit=False, bind=engine)() as session:
                 async with session.begin():
-                    session_began = datetime.now()
+
+                    result = await session.execute(func.current_setting("timezone"))
+                    db_timezone = ZoneInfo(result.scalar_one())
+
+                    result = await session.execute(select(func.now()))
+                    session_began = result.scalar_one()
+
+                    logger.info(
+                        f"Sync db session began at: {session_began}, DB timezone: {db_timezone}"
+                    )
+
                     result = None
                     if config.get("sync_mode") == "sync_full":
                         result = await session.execute(
                             text(full_sync_sql_query).bindparams(
-                                bindparam("last_synced_id", value=config.get("last_synced_id")),
+                                bindparam(
+                                    "last_synced_id",
+                                    value=config.get("last_synced_id"),
+                                    type_=BigInteger,
+                                ),
                                 bindparam("batch_size", value=config.get("batch_size")),
                             )
                         )
                     elif config.get("sync_mode") == "sync_changes":
+                        requested = datetime.fromisoformat(config.get("timestamp")).astimezone(
+                            db_timezone
+                        )
+                        safedelta = session_began - timedelta(minutes=MAX_SYNC_DELTA_MINUTES)
+                        if requested < safedelta:
+                            logger.warning(
+                                (
+                                    f"Requested changes since {requested}. "
+                                    f"In order to avoid slow query, only changes after {safedelta} are provided."
+                                )
+                            )
+                            timestamp = safedelta
+                        else:
+                            timestamp = requested
                         result = await session.execute(
                             text(updated_on_or_after_timestamp_sql_query).bindparams(
-                                bindparam("timestamp", value=config.get("timestamp"))
+                                bindparam("timestamp", value=timestamp)
                             )
                         )
                     if result:
@@ -419,3 +455,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+# 2025-07-24 09:20:26.265395
