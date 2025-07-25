@@ -301,10 +301,10 @@ async def task():
         config = None
         # FIXME: Handling HTTP timeouts and unreachable Sierra DB gracefully.
         async with httpx.AsyncClient(timeout=4.0) as client:
-            config_response = await client.get(f"{BACKEND_URL}/sync")
-            config = config_response.json()
-            logger.info(f"syncing with config: {config}")
             try:
+                config_response = await client.get(f"{BACKEND_URL}/sync")
+                config = config_response.json()
+                logger.info(f"syncing with config: {config}")
                 if config.get("sync_status") == "processing_sync_batch":
                     logger.warning(
                         "Target is still processing previous sync batch. Stopping task instance."
@@ -334,8 +334,8 @@ async def task():
                             )
                         )
                         return
-            except Exception:
-                logger.error(f"Unrecognized sync configuration {config}.")
+            except Exception as e:
+                logger.error(f"Error fetching configuration {e}.")
                 return
         if config:
             engine = create_async_engine(
@@ -345,10 +345,8 @@ async def task():
                 ),
                 echo=False,
             )
-
             async with async_sessionmaker(autocommit=False, bind=engine)() as session:
                 async with session.begin():
-
                     result = await session.execute(func.current_setting("timezone"))
                     db_timezone = ZoneInfo(result.scalar_one())
 
@@ -424,14 +422,19 @@ async def task():
                             )
                         }
                         async with httpx.AsyncClient(timeout=60.0) as client:
-                            post_response = await client.post(
-                                f"{BACKEND_URL}/sync",
-                                data={"timestamp": session_began.isoformat()},
-                                files=files,
-                            )
-                            logger.info(f"{post_response.json()}")
+                            try:
+                                post_response = await client.post(
+                                    f"{BACKEND_URL}/sync",
+                                    data={"timestamp": session_began.isoformat()},
+                                    files=files,
+                                )
+                                logger.info(f"{post_response.json()}")
+                            except Exception as e:
+                                logger.exception(f"Error uploading sync batch: {e}")
                     await session.close()
                 await engine.dispose()
+        else:
+            logger.error("Empty configuration")
     except Exception as e:
         if engine:
             await engine.dispose()

@@ -558,23 +558,44 @@ class Backend(QObject):
                                 self.active_tag = helmet_rfid_tag
 
                                 self.reader_state = ReaderState.PRINT_TAG
-                                """
-                                response = httpx.get(
-                                    f"http://127.0.0.1:8000/itemdata/{helmet_rfid_tag.primary_item_identifier}"
-                                )
-                        
-                                self.active_item = response.json()"""
-                                msg = []
-                                msg.append("<p><ul>")
-                                d = helmet_rfid_tag.__dict__
-                                for field in d:
-                                    msg.append(f"<li>{field}: {d[field]}</li>")
-                                """
-                                for field in self.active_item:
-                                    msg.append(f"<li>{field}: {self.active_item[field]}</li>")
-                                """
-                                msg.append("</ul></p>")
-                                self.read_message = "".join(msg)
+                                try:
+                                    if (
+                                        self.active_item is None
+                                        or self.active_tag.primary_item_identifier
+                                        != self.active_item.get("barcode")
+                                    ):
+                                        response = httpx.get(
+                                            f"http://127.0.0.1:8000/itemdata/{helmet_rfid_tag.primary_item_identifier}"
+                                        )
+                                        self.active_item = response.json()
+
+                                    msg = (
+                                        "<p>"
+                                        f"<h2>{self.active_item.get("best_title")}</h2>"
+                                        f"<h3>{self.active_item.get("best_author")
+                                               if self.active_item.get("best_author")
+                                               else ""}</h3>"
+                                        "</p><p>"
+                                        "<table>"
+                                        "<tr><th align='left'>Materiaali</th><td width=30>&nbsp;</td>"
+                                        f"<td>{self.active_item.get("material_name")}</td></tr>"
+                                        "<tr><th align='left'>Nidetyyppi</th><td width=10></td>"
+                                        f"<td>{self.active_item.get("item_type_name")}</td></tr>"
+                                        "<tr><th align='left'>Viivakoodi</th><td width=10></td>"
+                                        f"<td>{self.active_item.get("barcode")}</td></tr>"
+                                        "<tr><th align='left'>RFID ISIL</th><td width=10'></td>"
+                                        f"<td>{helmet_rfid_tag.owner_library_isil}</td></tr>"
+                                        "<tr><th>&nbsp;</th><td width=30>&nbsp;</td><td width=30>&nbsp;</td></tr>"
+                                        "<tr><th align='left'>Luokitus</th><td width=10p></td>"
+                                        f"<td>{self.active_item.get("classification")}</td></tr>"
+                                        "<tr><th align='left'>Pääsana</th><td width=10></td>"
+                                        f"<td>{self.active_item.get("paasana")}</td></tr>"
+                                        "</table>"
+                                        "</p>"
+                                    )
+                                    self.read_message = msg
+                                except Exception as e:
+                                    self.read_message = "<p>" f"<b>Virhe: {e}</b>" "</p>"
                             else:
                                 self.reader_state = ReaderState.UNKNOWN_TAG
                         elif response["command_code"] == "FE":
@@ -594,8 +615,8 @@ class Backend(QObject):
                     ):
                         # FIXME: Replace with values fetched from the backend
                         image = create_signum(
-                            classification="84.2",  # self.active_item["classification"],
-                            paasana="ygy",  # self.active_item["paasana"],
+                            classification=self.active_item["classification"],
+                            paasana=self.active_item["paasana"],
                             font_path="assets/arial.ttf",
                             minimum_font_height=32,
                             width=413,
@@ -616,15 +637,13 @@ class Backend(QObject):
                             hq=False,
                         )
                         # Uncomment the line below to show the signum in a window for debugging purposes
-                        image.show()
-                        """
+                        # image.show()
                         send(
                             instructions=instructions,
                             printer_identifier=self.printer["identifier"],
                             backend_identifier=self.printer.get("backend", "pyusb"),
                             blocking=False,
                         )
-                        """
                     else:
                         # If the tag is the same as the last printed one, do not print it again
                         pass
@@ -734,10 +753,12 @@ class Backend(QObject):
         # Determine the main message to display on the UI. We try to formulate a message using natural language.
         if self.overall_state == OverallState.BATTERY_LOW:
             self.message_sig.emit(
-                "<p><b>Virta vähissä!</b></p>"
-                + "<p>Tietokoneen akku on miltei tyhjä. Tulostus on varmuuden vuoksi kytketty pois päältä.</p>"
-                "<p><b>Ohjeet:</b></p>"
-                + "<p><ul><li>Käy viemässä tietokone lataukseen.</li></ul></p>"
+                (
+                    "<p><b>Virta vähissä!</b></p>"
+                    "<p>Tietokoneen akku on miltei tyhjä. Tulostus on varmuuden vuoksi kytketty pois päältä.</p>"
+                    "<p><b>Ohjeet:</b></p>"
+                    "<p><ul><li>Käy viemässä tietokone lataukseen.</li></ul></p>"
+                )
             )
         elif self.overall_state == OverallState.NOT_READY_TO_USE:
             positives, negatives, fixes = [], [], []
@@ -777,52 +798,62 @@ class Backend(QObject):
             if len(positives) > 0 and len(negatives) > 0:
                 conjunction = ", mutta "
             self.message_sig.emit(
-                "<p><b>Tarroja ei voi tulostaa juuri nyt.</b></p>"
-                + "<p>"
-                + f"{join_with_and(positives, "ja").capitalize()}{conjunction}{join_with_and(negatives, "eikä")}."
-                + "</p>"
-                + "<p><b>Ohjeet:</b>"
-                + f"<ul>{"\n".join(fixes)}</ul>"
-                + "</p>"
+                (
+                    "<p><b>Tarroja ei voi tulostaa juuri nyt.</b></p>"
+                    "<p>"
+                    f"{join_with_and(positives, "ja").capitalize()}{conjunction}{join_with_and(negatives, "eikä")}."
+                    "</p>"
+                    "<p><b>Ohjeet:</b>"
+                    f"<ul>{"\n".join(fixes)}</ul>"
+                    "</p>"
+                )
                 if len(fixes) > 0
                 else ""
             )
         elif self.overall_state == OverallState.READY_WITH_ERROR:
             if self.reader_state == ReaderState.MULTIPLE_TAGS_DETECTED:
                 self.message_sig.emit(
-                    "<p><b>Virhetilanne</b></p>"
-                    + "<p>Lukija havaitsee useita niteitä.</p>"
-                    + "<p><b>Ohjeet:</b></p>"
-                    + "<ul>"
-                    + "<li>Varmista, että lukijan läheisyydessä ei ole muita niteitä kuin se, "
-                    + "jota yrität tarroittaa</li>"
-                    + "</ul>"
+                    (
+                        "<p><b>Virhetilanne</b></p>"
+                        "<p>Lukija havaitsee useita niteitä.</p>"
+                        "<p><b>Ohjeet:</b></p>"
+                        "<ul>"
+                        "<li>Varmista, että lukijan läheisyydessä ei ole muita niteitä kuin se, "
+                        "jota yrität tarroittaa</li>"
+                        "</ul>"
+                    )
                 )
             elif (
                 self.reader_state == ReaderState.UNKNOWN_TAG
                 or previousReaderState == ReaderState.UNKNOWN_TAG
             ):
                 self.message_sig.emit(
-                    "<p><b>Virhetilanne</b></p>"
-                    + "<p>Niteessä on viallinen RFID-tagi. Se pitää vaihtaa ennen signum-tarran tulostamista.</p>"
-                    + "<p><b>Ohjeet:</b></p>"
-                    + "<ul>"
-                    + "<li>Laita nide syrjään. Anna vuoron lopuksi kaikki vastaavat niteet kirjastovirkailijalle. "
-                    + "Kirjastovirkailija lähettää niteen jatkokäsittelyyn.</li>"
-                    + "</ul>"
+                    (
+                        "<p><b>Virhetilanne</b></p>"
+                        "<p>Niteessä on viallinen RFID-tagi."
+                        "Se pitää vaihtaa tai aktivoida ennen signum-tarran tulostamista.</p>"
+                        "<p><b>Ohjeet:</b></p>"
+                        "<ul>"
+                        "<li>Laita nide syrjään. Anna vuoron lopuksi kaikki vastaavat niteet kirjastovirkailijalle. "
+                        "Kirjastovirkailija lähettää niteen jatkokäsittelyyn.</li>"
+                        "</ul>"
+                    )
                 )
             else:
                 self.message_sig.emit(
-                    "<p><b>Virhetilanne</b></p>"
-                    + "<p>Lukija palauttaa virheellisiä lukutuloksia.</p>"
-                    + "<p><b>Ohjeet:</b></p>"
-                    + "<ul>"
-                    + "<li>Varmista, ettei lukijan läheisyydessä ole radiohäiriötä aiheuttavaa esinettä tai laitetta, "
-                    + "esimerkiksi toista RFID-lukijaa.</li>"
-                    + "<li>Varmista, ettei lukijan läheisyydessä ole muita niteitä kuin se, jota yrität tarroittaa</li>"
-                    + "<li>CD, DVD ja Blu-Ray -levyt saattavat myös aiheuttaa häiriöitä. Kokeile kääntää kotelo ympäri"
-                    + "tai liikuttaa sitä hitaasti lukijan päällä.</li>"
-                    + "</ul>"
+                    (
+                        "<p><b>Virhetilanne</b></p>"
+                        "<p>Lukija palauttaa virheellisiä lukutuloksia.</p>"
+                        "<p><b>Ohjeet:</b></p>"
+                        "<ul>"
+                        "<li>Varmista, ettei lukijan läheisyydessä ole radiohäiriötä aiheuttavaa esinettä tai laitetta,"
+                        " esimerkiksi toista RFID-lukijaa.</li>"
+                        "<li>Varmista, ettei lukijan läheisyydessä ole muita niteitä kuin se, "
+                        "jota yrität tarroittaa</li>"
+                        "<li>CD, DVD ja Blu-Ray -levyt saattavat myös aiheuttaa häiriöitä. Kokeile kääntää kotelo "
+                        "ympäri tai liikuttaa sitä hitaasti lukijan päällä.</li>"
+                        "</ul>"
+                    )
                 )
         elif (
             self.reader_state == ReaderState.SINGLE_TAG_READ
@@ -832,13 +863,15 @@ class Backend(QObject):
             self.message_sig.emit(f"{self.read_message}")
         else:
             self.message_sig.emit(
-                "<p><b>Valmiina tulostamaan tarroja!</b></p>"
-                + "<p><b>Ohjeet:</b>"
-                + "<ol>"
-                + "<li>Aseta nide lukutason päälle</li>"
-                + "<li>Tulostin tulostaa tarran luettuaan niteen RFID-tunnisteen</li>"
-                + "<li>Kiinnitä tarra niteeseen</li>"
-                + "</ol>"
+                (
+                    "<p><b>Valmiina tulostamaan tarroja!</b></p>"
+                    "<p><b>Ohjeet:</b>"
+                    "<ol>"
+                    "<li>Aseta nide lukutason päälle</li>"
+                    "<li>Tulostin tulostaa tarran luettuaan niteen RFID-tunnisteen</li>"
+                    "<li>Kiinnitä tarra niteeseen</li>"
+                    "</ol>"
+                )
             )
 
 
