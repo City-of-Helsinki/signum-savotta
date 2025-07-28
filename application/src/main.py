@@ -2,6 +2,8 @@
 Signum labeller application
 """
 
+# FIXME: Split RFID reader related code to own class
+
 import ctypes
 import sys
 import time
@@ -323,6 +325,7 @@ class PrinterState(Enum):
     PRINTER_CONNECTED = 1
 
 
+# FIXME: The response parsing should be dynamic rather than comparing to static responses.
 RESPONSE_EMPTY = None
 RESPONSE_READER_READY_1 = bytes.fromhex("d500090400110a05021b972a")
 RESPONSE_READER_READY_2 = bytes.fromhex("d500090400110a050119e23b")
@@ -387,7 +390,11 @@ class Backend(QObject):
     # Timing values FIXME: Load from configuration file
     ui_interval = 200
     reader_wait = 0.1
+
+    # For UI "animation" based on reader event loop iterations
     iteration = 0
+
+    # The message to display to end user
     read_message = ""
 
     def __init__(self):
@@ -613,14 +620,20 @@ class Backend(QObject):
                     if (self.active_tag != self.last_printed_tag) and (
                         self.overall_state == OverallState.READY_TO_USE
                     ):
-                        # FIXME: Replace with values fetched from the backend
+                        # Print different size signum sticker for CDs
+                        if self.active_item.get("material_code") == "3":
+                            signum_height = 40
+                            minimum_font_height = 32
+                        else:
+                            signum_height = 42
+                            minimum_font_height = 32
                         image = create_signum(
                             classification=self.active_item["classification"],
                             paasana=self.active_item["paasana"],
                             font_path="assets/arial.ttf",
-                            minimum_font_height=32,
+                            minimum_font_height=minimum_font_height,
                             width=413,
-                            height=40,
+                            height=signum_height,
                         )
                         qlr = BrotherQLRaster(self.printer.get("model", "QL-810W"))
                         qlr.exception_on_warning = False

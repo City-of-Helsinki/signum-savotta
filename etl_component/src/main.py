@@ -46,7 +46,10 @@ item AS (
     LIMIT :batch_size
 ),
 item_number AS (
-    SELECT id, record_last_updated_gmt as item_record_last_updated_gmt, concat(concat('i',record_num),agency_code_num) as item_number
+    SELECT
+        id,
+        record_last_updated_gmt as item_record_last_updated_gmt,
+        concat(concat('i',record_num),agency_code_num) as item_number
     FROM sierra_view.record_metadata
     WHERE record_type_code = 'i'
     AND id IN (SELECT item.record_id FROM item)
@@ -76,7 +79,10 @@ bib_item_link AS (
         item_record_id IN (SELECT item.record_id FROM item)
 ),
 bib_number AS (
-    SELECT id, record_last_updated_gmt as bib_record_last_updated_gmt, concat(concat('b',record_num),agency_code_num) as bib_number
+    SELECT
+        id,
+        record_last_updated_gmt as bib_record_last_updated_gmt,
+        concat(concat('b',record_num),agency_code_num) as bib_number
     FROM sierra_view.record_metadata
     WHERE record_type_code = 'b'
     AND id IN (SELECT bib_item_link.bib_record_id FROM bib_item_link)
@@ -299,6 +305,8 @@ async def task():
     engine = None
     try:
         config = None
+        dataframe = None
+        session_began: datetime | None = None
         # FIXME: Handling HTTP timeouts and unreachable Sierra DB gracefully.
         async with httpx.AsyncClient(timeout=4.0) as client:
             try:
@@ -337,7 +345,7 @@ async def task():
             except Exception as e:
                 logger.error(f"Error fetching configuration {e}.")
                 return
-        if config:
+        if config is not None:
             engine = create_async_engine(
                 (
                     f"postgresql+asyncpg://{os.getenv("DB_USER")}:{os.getenv("DB_PASSWORD")}"
@@ -347,92 +355,98 @@ async def task():
             )
             async with async_sessionmaker(autocommit=False, bind=engine)() as session:
                 async with session.begin():
-                    result = await session.execute(func.current_setting("timezone"))
-                    db_timezone = ZoneInfo(result.scalar_one())
+                    try:
+                        result = await session.execute(func.current_setting("timezone"))
+                        db_timezone = ZoneInfo(result.scalar_one())
 
-                    result = await session.execute(select(func.now()))
-                    session_began = result.scalar_one()
+                        result = await session.execute(select(func.now()))
+                        session_began = result.scalar_one()
 
-                    logger.info(
-                        f"Sync db session began at: {session_began}, DB timezone: {db_timezone}"
-                    )
-
-                    result = None
-                    if config.get("sync_mode") == "sync_full":
-                        result = await session.execute(
-                            text(full_sync_sql_query).bindparams(
-                                bindparam(
-                                    "last_synced_id",
-                                    value=config.get("last_synced_id"),
-                                    type_=BigInteger,
-                                ),
-                                bindparam("batch_size", value=config.get("batch_size")),
-                            )
+                        logger.info(
+                            f"Sync db session began at: {session_began}, DB timezone: {db_timezone}"
                         )
-                    elif config.get("sync_mode") == "sync_changes":
-                        requested = datetime.fromisoformat(config.get("timestamp")).astimezone(
-                            db_timezone
-                        )
-                        safedelta = session_began - timedelta(minutes=MAX_SYNC_DELTA_MINUTES)
-                        if requested < safedelta:
-                            logger.warning(
-                                (
-                                    f"Requested changes since {requested}. "
-                                    f"In order to avoid slow query, only changes after {safedelta} are provided."
+
+                        result = None
+                        if config.get("sync_mode") == "sync_full":
+                            result = await session.execute(
+                                text(full_sync_sql_query).bindparams(
+                                    bindparam(
+                                        "last_synced_id",
+                                        value=config.get("last_synced_id"),
+                                        type_=BigInteger,
+                                    ),
+                                    bindparam("batch_size", value=config.get("batch_size")),
                                 )
                             )
-                            timestamp = safedelta
-                        else:
-                            timestamp = requested
-                        result = await session.execute(
-                            text(updated_on_or_after_timestamp_sql_query).bindparams(
-                                bindparam("timestamp", value=timestamp)
+                        elif config.get("sync_mode") == "sync_changes":
+                            requested = datetime.fromisoformat(config.get("timestamp")).astimezone(
+                                db_timezone
                             )
-                        )
-                    if result:
-                        df = pd.DataFrame(
-                            result.fetchall(),
-                            columns=result.keys(),
-                        )
-                        df = df.astype(
-                            {
-                                "item_record_id": "Int64",
-                                "item_number": "string",
-                                "barcode": "string",
-                                "bib_number": "string",
-                                "bib_record_id": "Int64",
-                                "best_author": "string",
-                                "best_title": "string",
-                                "itype_code_num": "uint8",
-                                "item_type_name": "string",
-                                "material_code": "string",
-                                "material_name": "string",
-                                "classification": "string",
-                                "paasana_json": "string",
-                            }
-                        )
-                        tsv_buffer = StringIO()
-                        df.to_csv(tsv_buffer, sep="\t", index=False)
-                        tsv_buffer.seek(0)
-                        files = {
-                            "file": (
-                                "data.tsv.gz",
-                                gzip.compress(tsv_buffer.getvalue().encode("utf-8")),
-                                "application/gzip",
-                            )
-                        }
-                        async with httpx.AsyncClient(timeout=60.0) as client:
-                            try:
-                                post_response = await client.post(
-                                    f"{BACKEND_URL}/sync",
-                                    data={"timestamp": session_began.isoformat()},
-                                    files=files,
+                            safedelta = session_began - timedelta(minutes=MAX_SYNC_DELTA_MINUTES)
+                            if requested < safedelta:
+                                logger.warning(
+                                    (
+                                        f"Requested changes since {requested}. "
+                                        f"In order to avoid slow query, only changes after {safedelta} are provided."
+                                    )
                                 )
-                                logger.info(f"{post_response.json()}")
-                            except Exception as e:
-                                logger.exception(f"Error uploading sync batch: {e}")
+                                timestamp = safedelta
+                            else:
+                                timestamp = requested
+                            result = await session.execute(
+                                text(updated_on_or_after_timestamp_sql_query).bindparams(
+                                    bindparam("timestamp", value=timestamp)
+                                )
+                            )
+                        if result is not None:
+                            dataframe = pd.DataFrame(
+                                result.fetchall(),
+                                columns=result.keys(),
+                            )
+                            dataframe = dataframe.astype(
+                                {
+                                    "item_record_id": "Int64",
+                                    "item_number": "string",
+                                    "barcode": "string",
+                                    "bib_number": "string",
+                                    "bib_record_id": "Int64",
+                                    "best_author": "string",
+                                    "best_title": "string",
+                                    "itype_code_num": "uint8",
+                                    "item_type_name": "string",
+                                    "material_code": "string",
+                                    "material_name": "string",
+                                    "classification": "string",
+                                    "paasana_json": "string",
+                                }
+                            )
+                    except Exception as e:
+                        {logger.error(e)}
                     await session.close()
+            if dataframe is not None:
+                tsv_buffer = StringIO()
+                dataframe.to_csv(tsv_buffer, sep="\t", index=False)
+                tsv_buffer.seek(0)
+                files = {
+                    "file": (
+                        "data.tsv.gz",
+                        gzip.compress(tsv_buffer.getvalue().encode("utf-8")),
+                        "application/gzip",
+                    )
+                }
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    try:
+                        post_response = await client.post(
+                            f"{BACKEND_URL}/sync",
+                            data={"timestamp": session_began.isoformat()},
+                            files=files,
+                        )
+                        logger.info(f"{post_response.json()}")
+                    except Exception as e:
+                        logger.exception(f"Error uploading sync batch: {e}")
                 await engine.dispose()
+            else:
+                logger.error("Dataframe was not populated")
         else:
             logger.error("Empty configuration")
     except Exception as e:
@@ -458,5 +472,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-# 2025-07-24 09:20:26.265395
