@@ -15,6 +15,7 @@ import httpx
 import pandas as pd
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import BigInteger, bindparam, func, select, text
+from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 logger = logging.getLogger("etl.stdout")
@@ -347,10 +348,15 @@ async def task():
                 return
         if config is not None:
             engine = create_async_engine(
-                (
-                    f"postgresql+asyncpg://{os.getenv("DB_USER")}:{os.getenv("DB_PASSWORD")}"
-                    f"@{os.getenv("DB_HOST")}:{os.getenv("DB_PORT")}/{os.getenv("DB_DATABASE")}"
+                URL.create(
+                    drivername="postgresql+asyncpg",
+                    username=os.getenv("DB_USER"),
+                    password=os.getenv("DB_PASSWORD"),
+                    host=os.getenv("DB_HOST"),
+                    port=int(os.getenv("DB_PORT")),
+                    database=os.getenv("DB_DATABASE"),
                 ),
+                connect_args={"server_settings": {"application_name": "signum-savotta-etl"}},
                 echo=False,
             )
             async with async_sessionmaker(autocommit=False, bind=engine)() as session:

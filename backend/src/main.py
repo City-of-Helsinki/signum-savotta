@@ -15,13 +15,14 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import uvicorn
-from fastapi import FastAPI, File, Form, Path, Response, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Path, Response, UploadFile
 from models.backend_state import BackendState, SyncMode, SyncStatus
 from models.base import Base
 from models.sierra_item import SierraItem
 from schemas import sierra_item_schema
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.inspection import inspect
 
@@ -34,15 +35,22 @@ log_formatter = logging.Formatter(
 stream_handler.setFormatter(log_formatter)
 logger.addHandler(stream_handler)
 
-FULL_SYNC_BATCH_SIZE = 100000
+FULL_SYNC_BATCH_SIZE = int(os.getenv("FULL_SYNC_BATCH_SIZE", 100000))
 
 local_timezone = ZoneInfo("localtime")
 
+# Application name needs to be added directly to asyncpg connect() via connect_args
+# Issue: https://github.com/MagicStack/asyncpg/issues/798
 engine = create_async_engine(
-    (
-        f"postgresql+asyncpg://{os.getenv("DB_USER")}:{os.getenv("DB_PASSWORD")}"
-        f"@{os.getenv("DB_HOST")}:{os.getenv("DB_PORT")}/{os.getenv("DB_NAME")}"
+    URL.create(
+        drivername="postgresql+asyncpg",
+        username=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        host=os.getenv("DB_HOST"),
+        port=int(os.getenv("DB_PORT")),
+        database=os.getenv("DB_NAME"),
     ),
+    connect_args={"server_settings": {"application_name": "signum-savotta-backend"}},
     echo=False,
 )
 
@@ -50,18 +58,30 @@ engine = create_async_engine(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    FastAPI app lifecycle handling
+    FastAPI application lifespan handler.
+
+    - Waits for the database to become available.
+    - Creates tables if they don't exist.
+    - Initializes persistent backend state if missing.
+    - Logs the current backend state.
+    - Disposes of the engine on shutdown.
     """
     database_available = False
-    while not database_available:
+    max_retries = 30
+    retries = 0
+    while not database_available and retries < max_retries:
         try:
             async with engine.begin() as conn:
                 # await conn.run_sync(Base.metadata.drop_all)
                 await conn.run_sync(Base.metadata.create_all)
                 database_available = True
         except Exception as e:
+            retries += 1
             logger.error(e)
             await asyncio.sleep(10)
+
+    if not database_available:
+        raise RuntimeError("Database not available after multiple attempts.")
 
     async with async_sessionmaker(engine)() as session:
         async with session.begin():
@@ -82,7 +102,6 @@ async def lifespan(app: FastAPI):
                 for attr in inspect(BackendState).attrs
             )
             logger.info(("Persistent backend state: " f"{state_str}"))
-
     yield
     await engine.dispose()
 
@@ -101,7 +120,7 @@ def read_root():
 @app.get("/status", tags=["status"])
 def get_status():
     """
-    get_status
+    General health check to confirm the app is alive for Kubernetes liveness probes or external monitoring tools.
     """
     return {"status": "OK"}
 
@@ -109,15 +128,21 @@ def get_status():
 @app.get("/readiness", tags=["readiness"])
 async def get_readiness():
     """
-    get_readiness
+    Readiness probe endpoint. Returns 200 if the app is ready to serve traffic, 503 otherwise.
     """
-    return Response(status_code=200)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("SELECT 1"))
+        return Response(status_code=200)
+    except Exception:
+        return Response(status_code=503)
 
 
 @app.get("/healthz", tags=["healthz"])
 async def get_healthz():
     """
-    get_healthz
+    General health check to confirm the app is alive for Kubernetes liveness probes or external monitoring tools.
+    Always returns 200 OK
     """
     return Response(status_code=200)
 
@@ -129,20 +154,32 @@ async def get_item_data(
     )
 ):
     """
-    get_item_data
+    Retrieve item data from the Sierra database using a barcode.
+
+    - **barcode**: A 14–16 digit numeric string, optionally followed by one alphanumeric character.
+    - **Returns**: A SierraItem object if found, otherwise `None`.
     """
     async with async_sessionmaker(autocommit=False, bind=engine)() as session:
         async with session.begin():
             result = await session.execute(select(SierraItem).where(SierraItem.barcode == barcode))
             sierra_item = result.scalar_one_or_none()
             session.expunge_all()
-            return sierra_item
+            if sierra_item is None:
+                raise HTTPException(status_code=404, detail="Item not found")
+            else:
+                return sierra_item
 
 
 @app.get("/sync")
 async def get_sync_configuration():
     """
-    get_sync_configuration
+    Retrieve the current synchronization configuration.
+
+    Returns sync mode, status, and either the last synced item ID (for full sync)
+    or the timestamp of last changes (for incremental sync).
+
+    The backend is in full sync mode after initial startup. When the full sync has been completed
+    the backend will switch to sync changes mode.
     """
     last_synced_id = 0
     async with async_sessionmaker(autocommit=False, bind=engine)() as session:
@@ -184,83 +221,59 @@ async def get_sync_configuration():
                 return {}
 
 
-def split_dicts_into_batches(dict_list, fields_per_dict=14, max_fields_per_batch=32767):
-    """
-    split_dicts_into_batches is used to
-    """
-    max_dicts_per_batch = max_fields_per_batch // fields_per_dict
-    return [
-        dict_list[i : i + max_dicts_per_batch]
-        for i in range(0, len(dict_list), max_dicts_per_batch)
-    ]
-
-
 @app.post("/sync")
 async def post_data_sync_batch(
-    file: Annotated[UploadFile, File()], timestamp: Annotated[str, Form()]
+    file: Annotated[UploadFile, File()], timestamp: Annotated[datetime, Form()]
 ):
     """
-    post_data_sync_batch
+    Accepts a gzip-compressed TSV file containing Sierra item data and a timestamp.
+    Parses and upserts the data into the database, updating sync state accordingly.
+
+    Args:
+        file: Gzipped TSV file containing item data.
+        timestamp: ISO 8601 formatted ETL timestamp.
+
+    Returns:
+        JSON response with the number of upserted items or an error message.
     """
 
-    etl_timestamp = datetime.fromisoformat(timestamp)
-
-    logger.info(f"Received: {file.content_type}, size {file.size}. ETL timestamp: {etl_timestamp}")
-    file_content = await file.read()
-    decompressed = gzip.decompress(file_content)
-
-    df = pd.read_csv(
-        BytesIO(decompressed),
-        delimiter="\t",
-        header=0,
-        encoding="utf8",
-        dtype={
-            "item_record_id": "Int64",
-            "item_number": "string",
-            "barcode": "string",
-            "bib_number": "string",
-            "bib_record_id": "Int64",
-            "best_author": "string",
-            "best_title": "string",
-            "itype_code_num": "uint8",
-            "item_type_name": "string",
-            "material_code": "string",
-            "material_name": "string",
-            "classification": "string",
-            "paasana_json": "string",
-        },
-    )
-    df["updated_at"] = pd.Timestamp(etl_timestamp)
-    sierra_items = df.to_dict(orient="records")
-
     try:
+
+        logger.info(f"Received: {file.content_type}, size {file.size}. ETL timestamp: {timestamp}")
+        file_content = await file.read()
+        decompressed = gzip.decompress(file_content)
+
+        df = pd.read_csv(
+            BytesIO(decompressed),
+            delimiter="\t",
+            header=0,
+            encoding="utf8",
+            dtype={
+                "item_record_id": "Int64",
+                "item_number": "string",
+                "barcode": "string",
+                "bib_number": "string",
+                "bib_record_id": "Int64",
+                "best_author": "string",
+                "best_title": "string",
+                "itype_code_num": "uint8",
+                "item_type_name": "string",
+                "material_code": "string",
+                "material_name": "string",
+                "classification": "string",
+                "paasana_json": "string",
+            },
+        )
+        df["updated_at"] = pd.Timestamp(timestamp)
+        sierra_items = df.to_dict(orient="records")
+
         async with async_sessionmaker(autocommit=False, bind=engine)() as session:
             async with session.begin():
                 result = await session.execute(select(BackendState))
                 backend_state: BackendState = result.scalar_one()
-
-                # FIXME: Move batch upsert completely to SierraItem and get rid of hardcoded fields
-                batches = split_dicts_into_batches(
-                    sierra_items, fields_per_dict=14, max_fields_per_batch=32767
-                )
-                for batch in batches:
-                    stmt = insert(SierraItem).values(batch)
-                    stmt = stmt.on_conflict_do_update(
-                        index_elements=[SierraItem.item_record_id],
-                        set_={
-                            col.name: stmt.excluded[col.name]
-                            for col in SierraItem.__table__.columns
-                            if col.name != "item_record_id"
-                        },
-                    ).returning(SierraItem)
-                    orm_stmt = (
-                        select(SierraItem)
-                        .from_statement(stmt)
-                        .execution_options(populate_existing=True)
-                    )
-                    await session.execute(orm_stmt)
+                await SierraItem.upsert_batch(session=session, dicts=sierra_items)
                 if backend_state.sync_mode == SyncMode.SYNC_FULL:
-                    first_etl = etl_timestamp if not backend_state.sync_changes_since else None
+                    first_etl = timestamp if not backend_state.sync_changes_since else None
                     if len(sierra_items) < FULL_SYNC_BATCH_SIZE:
                         await BackendState.upsert_singleton(
                             session=session,
@@ -284,15 +297,18 @@ async def post_data_sync_batch(
                         session=session,
                         instance=BackendState(
                             last_sync_run_completed_at=datetime.now(local_timezone),
-                            sync_changes_since=etl_timestamp,
+                            sync_changes_since=timestamp,
                         ),
                     )
                 else:
                     raise ValueError("Backend state error, sync_mode")
                 await session.commit()
+    except gzip.BadGzipFile as e:
+        logger.error(f"Gzip error: {e}")
+        raise HTTPException(status_code=400, detail="Invalid gzip file")
     except Exception as e:
         logger.error(e)
-        return {"error": f"{e}"}
+        raise HTTPException(status_code=500, detail="Internal server error")
 
     return {"upserted": len(sierra_items)}
 
