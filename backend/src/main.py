@@ -21,7 +21,6 @@ from models.base import Base
 from models.sierra_item import SierraItem
 from schemas import sierra_item_schema
 from sqlalchemy import func, select, text
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.inspection import inspect
