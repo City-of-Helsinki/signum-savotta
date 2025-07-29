@@ -29,6 +29,7 @@ logger.addHandler(stream_handler)
 
 # Configuration
 BACKEND_URL = os.getenv("BACKEND_URL")
+ETL_CLIENT_API_KEY = os.getenv("ETL_CLIENT_API_KEY")
 MAX_SYNC_DELTA_MINUTES = 60
 
 local_timezone = ZoneInfo("localtime")
@@ -114,7 +115,7 @@ raw_subfields AS (
                 'tag', tag,
                 'content', content
             )
-        ) AS paasana_json
+        ) AS shelfmark_json
     FROM sierra_view.subfield
     WHERE
         (marc_tag = '100' OR marc_tag = '110' OR marc_tag = '111' OR marc_tag = '130' OR marc_tag = '245')
@@ -146,7 +147,7 @@ SELECT
     bib_record_property.material_code,
     material_property_myuser.name as material_name,
     classification.classification,
-    raw_subfields.paasana_json
+    raw_subfields.shelfmark_json
 FROM
     item
 LEFT JOIN item_number ON item.record_id = item_number.id
@@ -235,7 +236,7 @@ raw_subfields AS (
                 'tag', tag,
                 'content', content
             )
-        ) AS paasana_json
+        ) AS shelfmark_json
     FROM sierra_view.subfield
     WHERE
         (marc_tag = '100' OR marc_tag = '110' OR marc_tag = '111' OR marc_tag = '130' OR marc_tag = '245')
@@ -280,7 +281,7 @@ SELECT
     bib_record_property.material_code,
     material_property_myuser.name as material_name,
     classification.classification,
-    raw_subfields.paasana_json
+    raw_subfields.shelfmark_json
 FROM
     bib_item_link
 LEFT JOIN item_record_property ON bib_item_link.item_record_id = item_record_property.item_record_id
@@ -309,9 +310,12 @@ async def task():
         dataframe = None
         session_began: datetime | None = None
         # FIXME: Handling HTTP timeouts and unreachable Sierra DB gracefully.
-        async with httpx.AsyncClient(timeout=4.0) as client:
+        async with httpx.AsyncClient(
+            timeout=4.0, headers={"x-api-key": ETL_CLIENT_API_KEY}
+        ) as client:
             try:
                 config_response = await client.get(f"{BACKEND_URL}/sync")
+                config_response.raise_for_status()
                 config = config_response.json()
                 logger.info(f"syncing with config: {config}")
                 if config.get("sync_status") == "processing_sync_batch":
@@ -409,6 +413,7 @@ async def task():
                                 result.fetchall(),
                                 columns=result.keys(),
                             )
+                            # FIXME: The dtypes should be in a common library shared between backend and etl
                             dataframe = dataframe.astype(
                                 {
                                     "item_record_id": "Int64",
@@ -423,7 +428,7 @@ async def task():
                                     "material_code": "string",
                                     "material_name": "string",
                                     "classification": "string",
-                                    "paasana_json": "string",
+                                    "shelfmark_json": "string",
                                 }
                             )
                     except Exception as e:
@@ -440,13 +445,16 @@ async def task():
                         "application/gzip",
                     )
                 }
-                async with httpx.AsyncClient(timeout=60.0) as client:
+                async with httpx.AsyncClient(
+                    timeout=120.0, headers={"x-api-key": ETL_CLIENT_API_KEY}
+                ) as client:
                     try:
                         post_response = await client.post(
                             f"{BACKEND_URL}/sync",
                             data={"timestamp": session_began.isoformat()},
                             files=files,
                         )
+                        post_response.raise_for_status()
                         logger.info(f"{post_response.json()}")
                     except Exception as e:
                         logger.exception(f"Error uploading sync batch: {e}")

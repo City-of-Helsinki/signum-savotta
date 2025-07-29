@@ -5,10 +5,10 @@ import QtQuick.Effects
 ApplicationWindow {
     id: mainWindow
     visible: true
-    visibility: Window.Maximized
+    // visibility: Window.Maximized
     width: 1366
     height: 768
-    flags: Qt.FramelessWindowHint, Qt.Window | Qt.WindowStaysOnTopHint
+    // flags: Qt.FramelessWindowHint, Qt.Window | Qt.WindowStaysOnTopHint
 
     property QtObject backend
     property string backendStatus: ""
@@ -190,8 +190,8 @@ ApplicationWindow {
             anchors.verticalCenter: parent.verticalCenter
             anchors.right: batteryStatus.left
             anchors.rightMargin: 20
-            text: "Tulostusasema " + mainWindow.printStationRegistrationName
-            font.pixelSize: 32
+            text: mainWindow.printStationRegistrationName
+            font.pixelSize: 24
             color: "white"
         }
         Rectangle {

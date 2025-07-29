@@ -9,17 +9,17 @@ from pydantic import BaseModel
 
 class SierraItemBase(BaseModel):
     item_record_id: int
-    item_number: str
+    item_number: Optional[str]
     barcode: str
-    bib_number: str
+    bib_number: Optional[str]
     best_author: Optional[str]
     best_title: Optional[str]
     itype_code_num: Optional[int]
     item_type_name: Optional[str]
     material_code: Optional[str]
     material_name: Optional[str]
-    classification: str
-    paasana: str
+    classification: Optional[str]
+    shelfmark: Optional[str]
 
 
 class SierraItem(SierraItemBase):

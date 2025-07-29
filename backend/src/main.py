@@ -1,5 +1,5 @@
 """
-FastAPI based backend for label printing solution
+FastAPI based backend for Signum-savotta signum (shelf mark) sticker printing application.
 """
 
 import asyncio
@@ -15,9 +15,22 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, Path, Response, UploadFile
-from models.backend_state import BackendState, SyncMode, SyncStatus
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Path,
+    Request,
+    Response,
+    UploadFile,
+)
+from fastapi.responses import JSONResponse
+from models.backend_state import BackendState, SyncMode
 from models.base import Base
+from models.client import Client, ClientType
 from models.sierra_item import SierraItem
 from schemas import sierra_item_schema
 from sqlalchemy import func, select, text
@@ -62,8 +75,6 @@ async def lifespan(app: FastAPI):
     - Waits for the database to become available.
     - Creates tables if they don't exist.
     - Initializes persistent backend state if missing.
-    - Logs the current backend state.
-    - Disposes of the engine on shutdown.
     """
     database_available = False
     max_retries = 30
@@ -88,9 +99,7 @@ async def lifespan(app: FastAPI):
             backend_state: BackendState = result.scalar_one_or_none()
             if not backend_state:
                 initial_state = BackendState(
-                    initialized_at=datetime.now(local_timezone),
-                    sync_mode=SyncMode.SYNC_FULL,
-                    sync_status=SyncStatus.IDLE,
+                    initialized_at=datetime.now(local_timezone), sync_mode=SyncMode.SYNC_FULL
                 )
                 backend_state = await BackendState.upsert_singleton(
                     session=session, instance=initial_state
@@ -105,29 +114,100 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
-app = FastAPI(lifespan=lifespan)
+async def allow_any_valid_client(x_api_key: Annotated[str, Header()]):
+    """
+    Validates the provided `x-api-key` header and returns the corresponding Client object.
+
+    This dependency checks whether the API key exists in the database. If valid, it returns
+    the associated Client instance. If invalid or missing, it raises an HTTP 403 error.
+
+    Args:
+        x_api_key (str): The API key provided in the request header.
+
+    Returns:
+        Client: The validated client object.
+
+    Raises:
+        HTTPException: If the API key is missing or invalid.
+    """
+
+    client: Client | None = None
+    async with async_sessionmaker(engine)() as session:
+        async with session.begin():
+            stmt = select(Client).where(Client.api_key == f"{x_api_key}")
+            result = await session.execute(stmt)
+            client = result.scalar_one_or_none()
+            session.expunge_all()
+    if client is None:
+        raise HTTPException(status_code=403, detail="Invalid x-api-key")
+    else:
+        return client
 
 
-@app.get("/")
-def read_root():
+async def allow_etl_client_only(client: Annotated[Client, Depends(allow_any_valid_client)]):
     """
-    read_root
+    Ensures that the validated client is of type `ETL`.
+
+    This dependency builds on `allow_any_valid_client` and restricts access to clients
+    whose `client_type` is `ClientType.ETL`. If the client type does not match, it raises
+    an HTTP 403 error.
+
+    Args:
+        client (Client): The validated client object from the previous dependency.
+
+    Returns:
+        Client: The client object if it is of type ETL.
+
+    Raises:
+        HTTPException: If the client is not of type ETL.
     """
-    return {"message": "Welcome to the FastAPI application!"}
+
+    if client.client_type != ClientType.ETL:
+        raise HTTPException(status_code=403, detail="Invalid x-api-key")
+    else:
+        return client
 
 
-@app.get("/status", tags=["status"])
-def get_status():
+async def allow_printer_client_only(client: Annotated[Client, Depends(allow_any_valid_client)]):
     """
-    General health check to confirm the app is alive for Kubernetes liveness probes or external monitoring tools.
+    Ensures that the validated client is of type `SIGNUM_PRINTER`.
+
+    This dependency builds on `allow_any_valid_client` and restricts access to clients
+    whose `client_type` is `ClientType.SIGNUM_PRINTER`. If the client type does not match,
+    it raises an HTTP 403 error.
+
+    Args:
+        client (Client): The validated client object from the previous dependency.
+
+    Returns:
+        Client: The client object if it is of type SIGNUM_PRINTER.
+
+    Raises:
+        HTTPException: If the client is not of type SIGNUM_PRINTER.
     """
-    return {"status": "OK"}
+
+    if client.client_type != ClientType.SIGNUM_PRINTER:
+        raise HTTPException(status_code=403, detail="Invalid x-api-key")
+    else:
+        return client
+
+
+app = FastAPI(
+    lifespan=lifespan,
+    root_path="/",
+    title="Signum-savotta API",
+    description="API for Signum-savotta signum (shelf mark) sticker printing application.",
+    docs_url="/",
+    redoc_url="/redoc",
+    version="1.0.0",
+)
 
 
 @app.get("/readiness", tags=["readiness"])
 async def get_readiness():
     """
-    Readiness probe endpoint. Returns 200 if the app is ready to serve traffic, 503 otherwise.
+    Readiness probe endpoint for Kubernetes readiness probes.
+    Returns 200 if the app is ready to serve traffic, 503 otherwise.
     """
     try:
         async with engine.begin() as conn:
@@ -146,18 +226,52 @@ async def get_healthz():
     return Response(status_code=200)
 
 
-@app.get("/itemdata/{barcode}", response_model=sierra_item_schema.SierraItem, tags=["itemdata"])
+@app.post("/status", tags=["status"])
+def post_status(
+    internal_hostname: Annotated[str, Form()],
+    internal_ip_address: Annotated[str, Form()],
+    client: Annotated[Client, Depends(allow_printer_client_only)],
+):
+    """ """
+    return {"status": "OK"}
+
+
+@app.get(
+    "/itemdata/{barcode}",
+    response_model=sierra_item_schema.SierraItem,
+    tags=["itemdata"],
+    dependencies=[Depends(allow_printer_client_only)],
+)
 async def get_item_data(
     barcode: str = Path(
-        ..., title="The ID of the item to retrieve", pattern="^[0-9]{14,16}\\w{0,1}$"
-    )
+        ..., title="The ID of the item to retrieve", pattern=r"^[0-9]{14,16}\w{0,1}$"
+    ),
 ):
     """
-    Retrieve item data from the Sierra database using a barcode.
+    This endpoint allows clients to fetch detailed information about a library item
+    by providing its barcode. The barcode must be a 14 to 16-digit numeric string,
+    optionally followed by a single alphanumeric character.
 
-    - **barcode**: A 14–16 digit numeric string, optionally followed by one alphanumeric character.
-    - **Returns**: A SierraItem object if found, otherwise `None`.
+    ### Path Parameters:
+    - **barcode** (`str`): The barcode of the item to retrieve. Must match the pattern:
+      14–16 digits optionally followed by one alphanumeric character.
+
+    ### Returns:
+    - **200 OK**: A `SierraItem` object containing the item's metadata.
+    - **404 Not Found**: If no item with the given barcode exists in the database.
+
+    ### Response Model:
+    - `SierraItem`
+
+    ### Example:
+    ```
+    GET /itemdata/12345678901234X
+    ```
+
+    ### Tags:
+    - itemdata
     """
+
     async with async_sessionmaker(autocommit=False, bind=engine)() as session:
         async with session.begin():
             result = await session.execute(select(SierraItem).where(SierraItem.barcode == barcode))
@@ -169,16 +283,43 @@ async def get_item_data(
                 return sierra_item
 
 
-@app.get("/sync")
-async def get_sync_configuration():
+@app.get("/sync", tags=["sync"], dependencies=[Depends(allow_etl_client_only)])
+async def get_sync_configuration(request: Request):
     """
-    Retrieve the current synchronization configuration.
+    Retrieve the current synchronization configuration and status.
 
-    Returns sync mode, status, and either the last synced item ID (for full sync)
-    or the timestamp of last changes (for incremental sync).
+    This endpoint provides insight into the backend's synchronization state, which determines
+    how Sierra item data is being ingested and updated. The backend operates in two modes:
 
-    The backend is in full sync mode after initial startup. When the full sync has been completed
-    the backend will switch to sync changes mode.
+    - **SYNC_FULL**: Initial mode after startup, performing full data ingestion in batches.
+    - **SYNC_CHANGES**: Incremental mode after full sync is completed, ingesting only changes.
+
+    ### Returns:
+    - **200 OK**: A JSON object containing:
+        - `sync_mode`: Current synchronization mode (`SYNC_FULL` or `SYNC_CHANGES`)
+        - `batch_size`: (Only in `SYNC_FULL`) Number of items per batch
+        - `last_synced_id`: (Only in `SYNC_FULL`) Highest item record ID processed
+        - `timestamp`: (Only in `SYNC_CHANGES`) ISO 8601 timestamp of last changes processed
+
+    ### Error Handling:
+    - **500 Internal Server Error**: If the backend state is invalid or cannot be interpreted.
+
+    ### Example Response (SYNC_FULL):
+    ```json
+    {
+      "sync_mode": "SYNC_FULL",
+      "batch_size": 1000,
+      "last_synced_id": 123456
+    }
+    ```
+
+    ### Example Response (SYNC_CHANGES):
+    ```json
+    {
+      "sync_mode": "SYNC_CHANGES",
+      "timestamp": "2025-07-28T12:00:00+03:00"
+    }
+    ```
     """
     last_synced_id = 0
     async with async_sessionmaker(autocommit=False, bind=engine)() as session:
@@ -198,7 +339,6 @@ async def get_sync_configuration():
                 )
                 return {
                     "sync_mode": backend_state.sync_mode,
-                    "sync_status": backend_state.sync_status,
                     "batch_size": FULL_SYNC_BATCH_SIZE,
                     "last_synced_id": last_synced_id,
                 }
@@ -208,7 +348,6 @@ async def get_sync_configuration():
                 )
                 return {
                     "sync_mode": backend_state.sync_mode,
-                    "sync_status": backend_state.sync_status,
                     "timestamp": backend_state.sync_changes_since.isoformat(),
                 }
             else:
@@ -216,26 +355,59 @@ async def get_sync_configuration():
                     f"{attr.key}: {getattr(backend_state, attr.key)}"
                     for attr in inspect(BackendState).attrs
                 )
-                logger.error(("Error fetching sync configuration, state: " f"{state_str}"))
-                return {}
+                raise HTTPException(
+                    status_code=500,
+                    detail=("Error fetching sync configuration, state: " f"{state_str}"),
+                )
 
 
-@app.post("/sync")
+@app.post("/sync", tags=["sync"], dependencies=[Depends(allow_etl_client_only)])
 async def post_data_sync_batch(
-    file: Annotated[UploadFile, File()], timestamp: Annotated[datetime, Form()]
+    request: Request, file: Annotated[UploadFile, File()], timestamp: Annotated[datetime, Form()]
 ):
     """
-    Accepts a gzip-compressed TSV file containing Sierra item data and a timestamp.
-    Parses and upserts the data into the database, updating sync state accordingly.
+    Ingest and synchronize Sierra item data from a gzip-compressed TSV file.
 
-    Args:
-        file: Gzipped TSV file containing item data.
-        timestamp: ISO 8601 formatted ETL timestamp.
+    This endpoint accepts a gzipped TSV file containing Sierra item records along with
+    an ETL timestamp. It decompresses and parses the file, upserts the item data into
+    the database, and updates the backend synchronization state based on the current
+    sync mode.
 
-    Returns:
-        JSON response with the number of upserted items or an error message.
+    ### Form Data:
+    - **file** (`UploadFile`): A gzip-compressed TSV file containing Sierra item data.
+    - **timestamp** (`datetime`): ISO 8601 formatted timestamp representing the ETL run time.
+
+    ### File Format:
+    The TSV file must include the following columns:
+    - `item_record_id`, `item_number`, `barcode`, `bib_number`, `bib_record_id`,
+      `best_author`, `best_title`, `itype_code_num`, `item_type_name`, `material_code`,
+      `material_name`, `classification`, `shelfmark_json`
+
+    ### Behavior:
+    - Parses the file into a DataFrame with strict typing.
+    - Upserts item records into the database.
+
+    ### Returns:
+    - **200 OK**: JSON object with the number of upserted items.
+    - **400 Bad Request**: If the uploaded file is not a valid gzip file.
+    - **500 Internal Server Error**: For unexpected errors during processing.
+
+    ### Example:
+    ```
+    POST /sync
+    Content-Type: multipart/form-data
+    Form fields:
+      - file: items.tsv.gz
+      - timestamp: 2025-07-28T12:00:00+03:00
+    ```
+
+    ### Response:
+    ```json
+    {
+      "upserted": 1245
+    }
+    ```
     """
-
     try:
 
         logger.info(f"Received: {file.content_type}, size {file.size}. ETL timestamp: {timestamp}")
@@ -247,6 +419,7 @@ async def post_data_sync_batch(
             delimiter="\t",
             header=0,
             encoding="utf8",
+            # FIXME: The dtypes should be in a common library shared between backend and etl
             dtype={
                 "item_record_id": "Int64",
                 "item_number": "string",
@@ -260,7 +433,7 @@ async def post_data_sync_batch(
                 "material_code": "string",
                 "material_name": "string",
                 "classification": "string",
-                "paasana_json": "string",
+                "shelfmark_json": "string",
             },
         )
         df["updated_at"] = pd.Timestamp(timestamp)
@@ -270,7 +443,9 @@ async def post_data_sync_batch(
             async with session.begin():
                 result = await session.execute(select(BackendState))
                 backend_state: BackendState = result.scalar_one()
-                await SierraItem.upsert_batch(session=session, dicts=sierra_items)
+                await SierraItem.upsert_batch(
+                    session=session, dicts=sierra_items, return_upserted=False
+                )
                 if backend_state.sync_mode == SyncMode.SYNC_FULL:
                     first_etl = timestamp if not backend_state.sync_changes_since else None
                     if len(sierra_items) < FULL_SYNC_BATCH_SIZE:

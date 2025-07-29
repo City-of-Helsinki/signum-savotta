@@ -5,6 +5,7 @@ Signum labeller application
 # FIXME: Split RFID reader related code to own class
 
 import ctypes
+import socket
 import sys
 import time
 import traceback
@@ -83,12 +84,12 @@ def get_font_size_for_text(text, initial_size, font_path, target_height):
     return font, bbox, height
 
 
-def create_signum(classification, paasana, font_path, minimum_font_height, width, height):
+def create_signum(classification, shelfmark, font_path, minimum_font_height, width, height):
     """
     get_font_size_for_text Creates a signum image for printing
 
     :param classification: the classification (in YKL)
-    :param paasana: three letter word for alphabetical sorting
+    :param shelfmark: three letter word for alphabetical sorting
     :param font_path: path to the font to use
     :param minimum_font_height: minimum font size to use (text will use all the space it can get)
     :param width: width of the signum in pixels. Note that this has to correspond to brother-ql continous roll widths
@@ -108,21 +109,21 @@ def create_signum(classification, paasana, font_path, minimum_font_height, width
     image = Image.new("RGB", (width, im_height), color="white")
     draw = ImageDraw.Draw(image)
 
-    luokitus_font, luokitus_bbox, luokitus_height = get_font_size_for_text(
+    classification_font, classification_bbox, classification_height = get_font_size_for_text(
         classification, minimum_font_height, font_path, height
     )
-    paasana_font, paasana_bbox, paasana_height = get_font_size_for_text(
-        paasana, minimum_font_height, font_path, height
+    shelfmark_font, shelfmark_bbox, shelfmark_height = get_font_size_for_text(
+        shelfmark, minimum_font_height, font_path, height
     )
 
-    paasana_position = (
-        width - draw.textlength(paasana, font=paasana_font),
-        (im_height - paasana_height) / 2 - paasana_bbox[1],
+    shelfmark_position = (
+        width - draw.textlength(shelfmark, font=shelfmark_font),
+        (im_height - shelfmark_height) / 2 - shelfmark_bbox[1],
     )
-    luokitus_position = (0, (im_height - luokitus_height) / 2 - luokitus_bbox[1])
+    classification_position = (0, (im_height - classification_height) / 2 - classification_bbox[1])
 
-    draw.text(luokitus_position, classification, fill="black", font=luokitus_font)
-    draw.text(paasana_position, paasana, fill="black", font=paasana_font)
+    draw.text(classification_position, classification, fill="black", font=classification_font)
+    draw.text(shelfmark_position, shelfmark, fill="black", font=shelfmark_font)
 
     return image
 
@@ -289,7 +290,8 @@ class BackendState(Enum):
 
     NO_BACKEND_RESPONSE = 0
     BACKEND_OK = 1
-    BACKEND_ERROR = 2
+    BACKEND_ERROR_RESPONSE = 2
+    BACKEND_EMPTY_RESPONSE = 3
 
 
 class RegistrationState(Enum):
@@ -340,8 +342,12 @@ class Backend(QObject):
     """
 
     # FIXME: Load these from configuration file
-    print_station_registration_name = "PASILA 01"
+    print_station_registration_name = "Kannelmäki, Malminkartano, Pitäjänmäki [1]"
     print_station_registration_key = ""
+
+    # Client internal IP address
+    internal_hostname = socket.gethostname()
+    internal_ip_address = None
 
     # Signals for updating the UI
     print_station_registration_name_sig = Signal(str, arguments=["string"])
@@ -383,10 +389,6 @@ class Backend(QObject):
     printer = None
     printer_identifier = None
 
-    # UI error messaging grace period in event loop cycles
-    error_cycles = 0
-    error_cycles_grace_period = 3
-
     # Timing values FIXME: Load from configuration file
     ui_interval = 200
     reader_wait = 0.1
@@ -395,10 +397,52 @@ class Backend(QObject):
     iteration = 0
 
     # The message to display to end user
-    read_message = ""
+    item_data_message = ""
+
+    @classmethod
+    def get_internal_ip(cls) -> str | None:
+        """
+        Returns the internal IP address of the interface used for outbound connections.
+        This is determined by creating a UDP socket to a public IP (e.g., 8.8.8.8).
+        """
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                return s.getsockname()[0]
+        except Exception:
+            return None
+
+    def refresh_status_with_backend(self):
+        self.internal_hostname = socket.gethostname()
+        self.internal_ip_address = self.__class__.get_internal_ip()
+        try:
+            data = {
+                "internal_hostname": f"{self.internal_hostname}",
+                "internal_ip_address": f"{self.internal_ip_address}",
+            }
+            # FIXME: Move hardcoded configuration to config file
+            response = httpx.post(
+                "http://127.0.0.1:8000/status/",
+                data=data,
+                headers={
+                    "x-api-key": self.print_station_registration_key,
+                },
+            )
+            response.raise_for_status()
+            self.backend_state = BackendState.BACKEND_OK
+            self.registration_state = RegistrationState.REGISTRATION_SUCCEEDED
+        except httpx.RequestError:
+            # Backend had a protocol level error
+            self.backend_state = BackendState.NO_BACKEND_RESPONSE
+            self.registration_state = RegistrationState.REGISTRATION_FAILED
+        except httpx.HTTPStatusError:
+            # Backend did respond, but the response status was either 4xx or 5xx
+            self.backend_state = BackendState.BACKEND_ERROR_RESPONSE
+            self.registration_state = RegistrationState.REGISTRATION_FAILED
 
     def __init__(self):
         super().__init__()
+        self.refresh_status_with_backend()
         self.timer = QTimer()
         self.timer.setInterval(self.ui_interval)
         self.timer.timeout.connect(self.reader_loop)
@@ -412,7 +456,7 @@ class Backend(QObject):
         """
         self.serial_port.write(data)
 
-    def read_data(self):
+    def read_data(self) -> bytes | None:
         """
         send_data reads data from the autoconfigured serial port
 
@@ -426,25 +470,28 @@ class Backend(QObject):
     # FIXME: The reader event loop is also the UI event loop. Separate for clarity.
     def reader_loop(self):
         """
-        reader_loop the application event loop
+        Application event loop
         """
 
         # Store the previous reader state for use in determining the overall status.
         # Solution for preventing read error scenarios from causing flickering in the UI
         previousReaderState = self.reader_state
 
-        # Emit just to inform that the reader loop is on
-        if self.iteration < 10:
-            self.iteration = self.iteration + 1
-        else:
-            self.iteration = 1
-        self.iteration_sig.emit(self.iteration)
-
         # Laptop battery
         battery = psutil.sensors_battery()
         if battery:
             self.batterycharging_sig.emit(battery.power_plugged)
             self.batterypercentage_sig.emit(battery.percent)
+
+        # Emit just to inform that the reader loop is on
+        if self.iteration < 10:
+            self.iteration = self.iteration + 1
+        else:
+            # Every 10th iteration we push client status to backend and check connectivity and authorization
+            # Any connectivity errors are also cleared
+            self.refresh_status_with_backend()
+            self.iteration = 1
+        self.iteration_sig.emit(self.iteration)
 
         # Autoconfigure printer
         devices = discover(backend_identifier="pyusb")
@@ -563,17 +610,17 @@ class Backend(QObject):
                             helmet_rfid_tag = HelmetRfidTag(response["raw_blocks"])
                             if helmet_rfid_tag.welformed_data:
                                 self.active_tag = helmet_rfid_tag
-
-                                self.reader_state = ReaderState.PRINT_TAG
                                 try:
                                     if (
                                         self.active_item is None
                                         or self.active_tag.primary_item_identifier
                                         != self.active_item.get("barcode")
                                     ):
+                                        # FIXME: Move hardcoded configuration to config file
                                         response = httpx.get(
                                             f"http://127.0.0.1:8000/itemdata/{helmet_rfid_tag.primary_item_identifier}"
                                         )
+                                        response.raise_for_status()
                                         self.active_item = response.json()
 
                                     msg = (
@@ -596,29 +643,63 @@ class Backend(QObject):
                                         "<tr><th align='left'>Luokitus</th><td width=10p></td>"
                                         f"<td>{self.active_item.get("classification")}</td></tr>"
                                         "<tr><th align='left'>Pääsana</th><td width=10></td>"
-                                        f"<td>{self.active_item.get("paasana")}</td></tr>"
+                                        f"<td>{self.active_item.get("shelfmark")}</td></tr>"
                                         "</table>"
                                         "</p>"
                                     )
-                                    self.read_message = msg
-                                except Exception as e:
-                                    self.read_message = "<p>" f"<b>Virhe: {e}</b>" "</p>"
+                                    self.item_data_message = msg
+                                    self.reader_state = ReaderState.PRINT_TAG
+                                except ValueError:
+                                    # Response was missing required data fields
+                                    self.reader_state = ReaderState.READER_CONNECTED
+                                    self.backend_state = BackendState.BACKEND_ERROR_RESPONSE
+                                    self.active_item = None
+                                except httpx.RequestError:
+                                    # Backend had a protocol level error
+                                    self.reader_state = ReaderState.READER_CONNECTED
+                                    self.backend_state = BackendState.NO_BACKEND_RESPONSE
+                                    self.active_item = None
+                                except httpx.HTTPStatusError as e:
+                                    # Backend did respond, but the response status was either 4xx or 5xx
+                                    self.reader_state = ReaderState.READER_CONNECTED
+                                    if e.response.status_code == 404:
+                                        self.backend_state = BackendState.BACKEND_EMPTY_RESPONSE
+                                    else:
+                                        self.backend_state = BackendState.BACKEND_ERROR_RESPONSE
+                                    self.active_item = None
+                                    self.item_data_message = "<p>" f"<b>Virhe: {e}</b>" "</p>"
+                                except Exception:
+                                    # Error catchall
+                                    self.reader_state = ReaderState.READER_CONNECTED
+                                    self.backend_state = BackendState.BACKEND_ERROR_RESPONSE
+                                    self.active_item = None
                             else:
                                 self.reader_state = ReaderState.UNKNOWN_TAG
+                                self.active_tag = None
+                                self.active_item = None
                         elif response["command_code"] == "FE":
                             # FIXME: error case, detected once, should not happen
                             self.reader_state = ReaderState.READER_ERROR
+                            self.active_tag = None
+                            self.active_item = None
                         else:
                             self.active_address = None
                             self.active_tag = None
                             self.last_printed_tag = None
+                            self.active_item = None
                             self.reader_state = ReaderState.READER_ERROR
                     except Exception:
                         self.reader_state = ReaderState.READER_CONNECTED
+                        self.active_address = None
+                        self.active_tag = None
+                        self.last_printed_tag = None
+                        self.active_item = None
 
                 case ReaderState.PRINT_TAG:
-                    if (self.active_tag != self.last_printed_tag) and (
-                        self.overall_state == OverallState.READY_TO_USE
+                    if (
+                        self.active_tag != self.last_printed_tag
+                        and self.overall_state == OverallState.READY_TO_USE
+                        and self.active_item is not None
                     ):
                         # Print different size signum sticker for CDs
                         if self.active_item.get("material_code") == "3":
@@ -629,7 +710,7 @@ class Backend(QObject):
                             minimum_font_height = 32
                         image = create_signum(
                             classification=self.active_item["classification"],
-                            paasana=self.active_item["paasana"],
+                            shelfmark=self.active_item["shelfmark"],
                             font_path="assets/arial.ttf",
                             minimum_font_height=minimum_font_height,
                             width=413,
@@ -700,7 +781,6 @@ class Backend(QObject):
             and (previousReaderState != ReaderState.UNKNOWN_TAG)
             and (self.printer_state == PrinterState.PRINTER_CONNECTED)
         ):
-            self.error_cycles = 0
             self.overall_state = OverallState.READY_TO_USE
         elif (
             (self.backend_state == BackendState.BACKEND_OK)
@@ -715,19 +795,11 @@ class Backend(QObject):
             )
             and (self.printer_state == PrinterState.PRINTER_CONNECTED)
         ):
-            self.error_cycles = 0
+            self.overall_state = OverallState.READY_WITH_ERROR
+        elif self.backend_state == BackendState.BACKEND_ERROR_RESPONSE:
             self.overall_state = OverallState.READY_WITH_ERROR
         else:
-            # Allow grace period when transitioning to NOT_READY_TO_USE state to avoid flickering in the UI
-            # FIXME: Use transition states instead and have specific grace periods for each of them
-            if (self.overall_state == OverallState.READY_TO_USE) and (
-                self.error_cycles < self.error_cycles_grace_period
-            ):
-                self.error_cycles += 1
-                OverallState.READY_TO_USE
-            else:
-                self.error_cycles = 0
-                self.overall_state = OverallState.NOT_READY_TO_USE
+            self.overall_state = OverallState.NOT_READY_TO_USE
 
         # Emit print station registration name
         self.print_station_registration_name_sig.emit(f"{self.print_station_registration_name}")
@@ -743,17 +815,17 @@ class Backend(QObject):
         if self.backend_state == BackendState.BACKEND_OK:
             self.backend_statustext_sig.emit("Taustajärjestelmäversio 1.0.0")
         elif self.backend_state == BackendState.NO_BACKEND_RESPONSE:
-            self.backend_statustext_sig.emit("Ei yhteyttä taustajärjestelmään")
+            self.backend_statustext_sig.emit("Ei yhteyttä")
         else:
-            self.backend_statustext_sig.emit("Taustajärjestelmävirhe: Ei yhteyttä Sierraan")
+            self.backend_statustext_sig.emit("Virhetilanne.")
 
         if self.registration_state == RegistrationState.REGISTRATION_SUCCEEDED:
             self.registration_statustext_sig.emit(
-                f"{self.print_station_registration_name}, valtuutus ok"
+                f"{self.internal_hostname} [{self.internal_ip_address}], OK"
             )
         else:
             self.registration_statustext_sig.emit(
-                f"{self.print_station_registration_name}, ei valtuutusta"
+                f"{self.internal_hostname} [{self.internal_ip_address}], EI OK"
             )
 
         self.reader_statustext_sig.emit(f"RFID-lukija, {self.reader_version}")
@@ -786,7 +858,7 @@ class Backend(QObject):
             if self.backend_state == BackendState.NO_BACKEND_RESPONSE:
                 negatives.append("taustajärjestelmä ei vastaa")
                 fixes.append("<li>Varmista, että toimipaikan verkkoyhteys toimii</li>")
-            elif self.backend_state == BackendState.BACKEND_ERROR:
+            elif self.backend_state == BackendState.BACKEND_ERROR_RESPONSE:
                 negatives.append("taustajärjestelmässä on virhe")
                 fixes.append(
                     "<li>Pyydä toimipaikan pääkäyttäjää ilmoittamaan taustajärjestelmän virheestä</li>"
@@ -852,6 +924,24 @@ class Backend(QObject):
                         "</ul>"
                     )
                 )
+            elif self.backend_state == BackendState.BACKEND_ERROR_RESPONSE:
+                self.message_sig.emit(
+                    "<p><b>Virhetilanne</b></p>"
+                    "<p>Niteen tietoja ei saada haettua taustajärjestelmästä taustajärjestelmän palauttaman virheen vuoksi.</p>"
+                    "<p><b>Ohjeet:</b></p>"
+                    "<ul>"
+                    "<li>Odota vähän aikaa ja kokeile samalla tai eri niteellä uudestaan.</li>"
+                    "</ul>"
+                )
+            elif self.backend_state == BackendState.BACKEND_EMPTY_RESPONSE:
+                self.message_sig.emit(
+                    "<p><b>Virhetilanne</b></p>"
+                    "<p>Niteelle ei ole saatavilla tietoja taustajärjestelmässä.</p>"
+                    "<p><b>Ohjeet:</b></p>"
+                    "<ul>"
+                    "<li>Ilmoita tilanteesta kirjastovirkailijalle.</li>"
+                    "</ul>"
+                )
             else:
                 self.message_sig.emit(
                     (
@@ -873,7 +963,7 @@ class Backend(QObject):
             or self.reader_state == ReaderState.PRINT_TAG
         ) and self.active_tag is not None:
             # FIXME: Replace with the book title
-            self.message_sig.emit(f"{self.read_message}")
+            self.message_sig.emit(f"{self.item_data_message}")
         else:
             self.message_sig.emit(
                 (

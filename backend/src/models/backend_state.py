@@ -31,15 +31,6 @@ class SyncMode(enum.Enum):
     SYNC_CHANGES = "sync_changes"
 
 
-class SyncStatus(enum.Enum):
-    """
-    SyncStatus
-    """
-
-    IDLE = "idle"
-    PROCESSING_SYNC_BATCH = "processing_sync_batch"
-
-
 class BackendState(Base):
     """
     BackendState defines a singleton table where only one row exists
@@ -55,7 +46,6 @@ class BackendState(Base):
     )
 
     sync_mode: Mapped[Optional[SyncMode]] = mapped_column("sync_mode", Enum(SyncMode))
-    sync_status: Mapped[Optional[SyncStatus]] = mapped_column("sync_status", Enum(SyncStatus))
 
     full_sync_completed_at: Mapped[Optional[datetime]] = mapped_column(
         "full_sync_completed_at", DateTime(timezone=True)

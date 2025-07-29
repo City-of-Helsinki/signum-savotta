@@ -10,20 +10,8 @@ from typing import List, Optional
 import regex
 import uroman as ur
 from models.base import Base
-from sqlalchemy import (
-    JSON,
-    BigInteger,
-    DateTime,
-    Index,
-    SmallInteger,
-    String,
-    Text,
-    select,
-)
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import JSON, BigInteger, DateTime, Index, SmallInteger, String, Text
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Mapped, mapped_column
 
 uroman = ur.Uroman()
@@ -65,7 +53,7 @@ class SierraItem(Base):
 
     This model maps to the `sierra_item` table in the database and includes fields such as item
     identifiers, bibliographic references, material types, and classification data. It also provides
-    a hybrid property `paasana` for generating a three-letter alphabetic sorting key based on MARC
+    a hybrid property `shelfmark` for generating a three-letter alphabetic sorting key based on MARC
     metadata, and a class method `upsert_batch` for efficient batch upsert operations.
 
     Attributes:
@@ -80,13 +68,14 @@ class SierraItem(Base):
         item_type_name (Optional[str]): Human-readable item type name.
         material_code (Optional[str]): Material type code.
         material_name (Optional[str]): Human-readable material type name.
-        classification (Optional[str]): Classification string (e.g., shelf mark).
-        paasana_json (Optional[str]): JSON-encoded MARC metadata used to derive
+        classification (Optional[str]): Classification string.
+        shelfmark_json (Optional[str]): JSON-encoded MARC metadata used to derive
             the three-letter alphabetic sorting string (pääsana).
         updated_at (datetime): Timestamp of the last update.
+        times_printed (int): Times the signum has been printed
 
     Hybrid Properties:
-        paasana (str): A three-letter string used for alphabetic sorting, derived from MARC fields.
+        shelfmark (str): A three-letter string used for alphabetic sorting, derived from MARC fields.
 
     Class Methods:
         upsert_batch(session: AsyncSession, dicts: List[dict]):
@@ -96,6 +85,9 @@ class SierraItem(Base):
     Indexes:
         ix_barcode: Hash index on the `barcode` column for fast lookups.
     """
+
+    # Override index_columns from parent class Base so that batch insert works
+    index_columns: List[str] = ["item_record_id"]
 
     __tablename__ = "sierra_item"
     __table_args__ = (Index("ix_barcode", "barcode", postgresql_using="hash"),)
@@ -112,15 +104,16 @@ class SierraItem(Base):
     material_code: Mapped[Optional[str]] = mapped_column("material_code", String(3))
     material_name: Mapped[Optional[str]] = mapped_column("material_name", String(255))
     classification: Mapped[Optional[str]] = mapped_column("classification", Text)
-    paasana_json: Mapped[Optional[str]] = mapped_column("paasana_json", JSON)
+    shelfmark_json: Mapped[Optional[str]] = mapped_column("shelfmark_json", JSON)
     updated_at: Mapped[datetime] = mapped_column("updated_at", DateTime(timezone=True))
+    times_printed: Mapped[int] = mapped_column("times_printed", SmallInteger, default=0)
 
     @hybrid_property
-    def paasana(self) -> str:
+    def shelfmark(self) -> str:
         """
-        Returns a three-letter alphabetic sorting key (pääsana) derived from MARC fields.
+        Returns a three-letter alphabetic sorting key for shelfmark derived from MARC fields.
 
-        This property parses the `paasana_json` field, which contains MARC metadata in JSON format.
+        This property parses the `shelfmark_json` field, which contains MARC metadata in JSON format.
         It searches for specific MARC tags and indicators in a prioritized order to extract the most
         relevant content for sorting. The extracted content is then cleaned and truncated to a
         three-character string using the `signumize` function.
@@ -132,18 +125,22 @@ class SierraItem(Base):
             AttributeError: If `signumize` fails to generate a valid string from the content.
         """
 
-        if not self.paasana_json:
+        if not self.shelfmark_json:
             return "***"
 
         try:
             fieldlist = []
-            if self.paasana_json is not None and self.paasana_json != "":
-                preprocessed = regex.sub(r"(?<={| )'", r'"', self.paasana_json)
+            if self.shelfmark_json is not None and self.shelfmark_json != "":
+                preprocessed = regex.sub(r"(?<={| )'", r'"', self.shelfmark_json)
                 preprocessed = regex.sub(r"'(?=[:,}])", r'"', preprocessed)
                 fieldlist = json.loads(preprocessed)
         except Exception:
             return "***"
-
+        """
+        FIXME: This could be refactored to priority list instead to avoid multiple loops.
+        However, having the multiple loops makes it easier to change logic of one case without need to
+        add flags to priority list.
+        """
         for field in fieldlist:
             if field["marc_tag"] == "100" and field["tag"] == "a" and field["marc_ind1"] == "1":
                 return signumize(field["content"], 0)
@@ -191,43 +188,3 @@ class SierraItem(Base):
                 return signumize(field["content"], 0)
 
         return "***"
-
-    @classmethod
-    async def upsert_batch(cls, session: AsyncSession, dicts: List[dict]):
-        """
-        Performs a batch upsert (insert or update) of the provided dictionaries into the database.
-
-        This method splits the input list of dictionaries into batches to avoid exceeding PostgreSQL's
-        parameter limit (32,767). Each batch is inserted using a PostgreSQL `ON CONFLICT DO UPDATE`
-        clause, which updates existing records based on the `item_record_id` primary key.
-
-        Args:
-            session (AsyncSession): The SQLAlchemy asynchronous session used for database operations.
-            dicts (List[dict]): A list of dictionaries representing SierraItem records to be upserted.
-
-        Returns:
-            None
-
-        Note:
-            - The method does not return the upserted objects.
-            - This method assumes that `item_record_id` is the unique identifier for conflict resolution.
-        """
-
-        mapper = inspect(cls)
-        max_dicts_per_batch = 32767 // len(mapper.attrs)
-        batches = [
-            dicts[i : i + max_dicts_per_batch] for i in range(0, len(dicts), max_dicts_per_batch)
-        ]
-
-        for batch in batches:
-            stmt = insert(cls).values(batch)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=[cls.item_record_id],
-                set_={
-                    col.name: stmt.excluded[col.name]
-                    for col in cls.__table__.columns
-                    if col.name != "item_record_id"
-                },
-            ).returning(cls)
-            orm_stmt = select(cls).from_statement(stmt).execution_options(populate_existing=True)
-            await session.execute(orm_stmt)
