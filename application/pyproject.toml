@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "signum-savotta-application"
 version = "0.0.1"
-description = "Helsinki City Library classification change labeller application."
+description = "Helsinki City Library classification change shelf mark labelling application."
 authors = ["Mikko Vihonen <mikko.vihonen@iki.fi>"]
 readme = "README.md"
 packages = [{include = "src"}]

@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "signum-savotta-etl"
 version = "0.0.1"
-description = "ETL component for Helsinki City Library classification change labeller application."
+description = "ETL component for Helsinki City Library classification change shelf mark labelling application."
 authors = ["Mikko Vihonen <mikko.vihonen@iki.fi>"]
 readme = "README.md"
 packages = [{include = "src"}]
