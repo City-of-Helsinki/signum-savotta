@@ -257,8 +257,34 @@ async def post_status(
 
     async with async_sessionmaker(autocommit=False, bind=engine)() as session:
         async with session.begin():
+            result = await session.execute(select(BackendState))
+            backend_state = result.scalar_one_or_none()
+            if backend_state is not None:
+                content = {
+                    "full_sync_completed_at": (
+                        backend_state.full_sync_completed_at.isoformat()
+                        if backend_state.full_sync_completed_at
+                        else ""
+                    ),
+                    "initialized_at": (
+                        backend_state.initialized_at.isoformat()
+                        if backend_state.initialized_at
+                        else ""
+                    ),
+                    "last_sync_run_completed_at": (
+                        backend_state.last_sync_run_completed_at.isoformat()
+                        if backend_state.last_sync_run_completed_at
+                        else ""
+                    ),
+                    "sync_changes_since": (
+                        backend_state.sync_changes_since.isoformat()
+                        if backend_state.sync_changes_since
+                        else ""
+                    ),
+                    "sync_mode": backend_state.sync_mode.name,
+                }
             stmt = (
-                await update(Client)
+                update(Client)
                 .where(Client.id == client.id)
                 .values(
                     internal_hostname=internal_hostname,
@@ -267,20 +293,8 @@ async def post_status(
                 )
             )
             await session.execute(stmt)
-            result = await session.execute(select(BackendState))
-            backend_state: BackendState = result.scalar_one_or_none()
-
             await session.commit()
-    return JSONResponse(
-        status_code=200,
-        content={
-            "full_sync_completed_at": backend_state.full_sync_completed_at,
-            "initialized_at": backend_state.initialized_at,
-            "last_sync_run_completed_at": backend_state.last_sync_run_completed_at,
-            "sync_changes_since": backend_state.sync_changes_since,
-            "sync_mode": backend_state.sync_mode,
-        },
-    )
+            return JSONResponse(status_code=200, content=content)
 
 
 @app.get(
@@ -292,7 +306,7 @@ async def post_status(
 async def get_item_data(
     barcode: str = Path(
         ..., title="The ID of the item to retrieve", pattern=r"^[0-9]{14,16}\w{0,1}$"
-    ),
+    )
 ):
     """
     This endpoint allows clients to fetch detailed information about a library item
@@ -322,16 +336,17 @@ async def get_item_data(
     async with async_sessionmaker(autocommit=False, bind=engine)() as session:
         async with session.begin():
             result = await session.execute(select(SierraItem).where(SierraItem.barcode == barcode))
-            sierra_item = result.scalar_one_or_none()
+            sierra_item: SierraItem = result.scalar_one_or_none()
             session.expunge_all()
             if sierra_item is None:
                 raise HTTPException(status_code=404, detail="Item not found")
             else:
+                logger.info(f"sierra: {sierra_item.best_title}")
                 return sierra_item
 
 
 @app.get("/sync", tags=["sync"], dependencies=[Depends(allow_etl_client_only)])
-async def get_sync_configuration(request: Request):
+async def get_sync_configuration():
     """
     Retrieve the current synchronization configuration and status.
 
@@ -387,7 +402,7 @@ async def get_sync_configuration(request: Request):
                 return JSONResponse(
                     status_code=200,
                     content={
-                        "sync_mode": backend_state.sync_mode,
+                        "sync_mode": backend_state.sync_mode.name,
                         "batch_size": FULL_SYNC_BATCH_SIZE,
                         "last_synced_id": last_synced_id,
                     },
@@ -399,7 +414,7 @@ async def get_sync_configuration(request: Request):
                 return JSONResponse(
                     status_code=200,
                     content={
-                        "sync_mode": backend_state.sync_mode,
+                        "sync_mode": backend_state.sync_mode.name,
                         "timestamp": backend_state.sync_changes_since.isoformat(),
                     },
                 )
@@ -416,7 +431,7 @@ async def get_sync_configuration(request: Request):
 
 @app.post("/sync", tags=["sync"], dependencies=[Depends(allow_etl_client_only)])
 async def post_data_sync_batch(
-    request: Request, file: Annotated[UploadFile, File()], timestamp: Annotated[datetime, Form()]
+    file: Annotated[UploadFile, File()], timestamp: Annotated[datetime, Form()]
 ):
     """
     Ingest and synchronize Sierra item data from a gzip-compressed TSV file.

@@ -323,26 +323,26 @@ async def task():
                         "Target is still processing previous sync batch. Stopping task instance."
                     )
                     return
-                elif config.get("sync_type") == "sync_full":
+                elif config.get("sync_type") == "SYNC_FULL":
                     try:
                         int(config.get("last_synced_id"))
                         int(config.get("batch_size"))
                     except Exception:
                         logger.error(
                             (
-                                "sync_full with faulty parameters: "
+                                "SYNC_FULL with faulty parameters: "
                                 f"last_synced_id: {config.get("last_synced_id")}, "
                                 f"batch_size: {config.get("batch_size")}"
                             )
                         )
                         return
-                elif config.get("sync_type") == "sync_changes":
+                elif config.get("sync_type") == "SYNC_CHANGES":
                     try:
                         datetime.fromisoformat(config.get("timestamp"))
                     except Exception:
                         logger.error(
                             (
-                                "sync_changes with faulty parameters: "
+                                "SYNC_CHANGES with faulty parameters: "
                                 f"timestamp: {config.get("timestamp")}"
                             )
                         )
@@ -377,7 +377,7 @@ async def task():
                         )
 
                         result = None
-                        if config.get("sync_mode") == "sync_full":
+                        if config.get("sync_mode") == "SYNC_FULL":
                             result = await session.execute(
                                 text(full_sync_sql_query).bindparams(
                                     bindparam(
@@ -388,7 +388,7 @@ async def task():
                                     bindparam("batch_size", value=config.get("batch_size")),
                                 )
                             )
-                        elif config.get("sync_mode") == "sync_changes":
+                        elif config.get("sync_mode") == "SYNC_CHANGES":
                             requested = datetime.fromisoformat(config.get("timestamp")).astimezone(
                                 db_timezone
                             )

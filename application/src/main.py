@@ -9,6 +9,7 @@ import socket
 import sys
 import time
 import traceback
+from configparser import RawConfigParser
 from enum import Enum
 
 import assets_rc  # noqa: F401
@@ -20,7 +21,7 @@ from brother_ql.conversion import convert
 from brother_ql.raster import BrotherQLRaster
 from helmet_rfid_tag import HelmetRfidTag
 from PIL import Image, ImageDraw, ImageFont
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from PySide6.QtGui import QGuiApplication, QIcon, QPixmap
 from PySide6.QtQml import QQmlApplicationEngine
 
@@ -283,12 +284,21 @@ class OverallState(Enum):
     BATTERY_LOW = 3
 
 
+class ConfigurationState(Enum):
+    """
+    Configuration states.
+    """
+
+    INVALID_CONFIGURATION = 0
+    VALID_CONFIGURATION = 1
+
+
 class BackendState(Enum):
     """
     Backend states.
     """
 
-    NO_BACKEND_RESPONSE = 0
+    BACKEND_NOT_AVAILABLE = 0
     BACKEND_OK = 1
     BACKEND_ERROR_RESPONSE = 2
     BACKEND_EMPTY_RESPONSE = 3
@@ -341,17 +351,9 @@ class Backend(QObject):
     Exposes and emits Qt signals to the Qt Quick UI.
     """
 
-    # FIXME: Load these from configuration file
-    print_station_registration_name = "Kannelmäki, Malminkartano, Pitäjänmäki [1]"
-    print_station_registration_key = ""
-
-    # Client internal IP address
-    internal_hostname = socket.gethostname()
-    internal_ip_address = None
-
-    # Signals for updating the UI
-    print_station_registration_name_sig = Signal(str, arguments=["string"])
+    registration_name_sig = Signal(str, arguments=["string"])
     backend_state_sig = Signal(str, arguments=["string"])
+    configuration_state_sig = Signal(str, arguments=["string"])
     registration_state_sig = Signal(str, arguments=["string"])
     reader_state_sig = Signal(str, arguments=["string"])
     printer_state_sig = Signal(str, arguments=["string"])
@@ -365,39 +367,101 @@ class Backend(QObject):
     batterypercentage_sig = Signal(int, arguments=["int"])
     batterycharging_sig = Signal(bool, arguments=["bool"])
 
-    # Overall state initialization
-    overall_state = OverallState.NOT_READY_TO_USE
+    def __init__(self):
 
-    # Backend initial state variables
-    backend_state = BackendState.BACKEND_OK
+        # Client internal IP address
+        self.internal_hostname = socket.gethostname()
+        self.internal_ip_address = None
 
-    # Registration initial state variables
-    registration_state = RegistrationState.REGISTRATION_SUCCEEDED
+        # Overall state variable
+        self.overall_state: OverallState = OverallState.NOT_READY_TO_USE
 
-    # Reader intial state variables
-    reader_version = None
-    reader_state = ReaderState.NO_READER_CONNECTED
-    active_address = None
-    active_tag = None
-    active_item = None
-    last_printed_tag = None
-    serial_port_number = 1
-    serial_port = None
+        # Backend state variables
+        self.backend_state: BackendState = BackendState.BACKEND_NOT_AVAILABLE
+        self.backend_url = None
 
-    # Printer initial state variables
-    printer_state = PrinterState.NO_PRINTER_CONNECTED
-    printer = None
-    printer_identifier = None
+        # Registration state variables
+        self.registration_name = None
+        self.registration_key = None
+        self.registration_state: RegistrationState = RegistrationState.REGISTRATION_FAILED
 
-    # Timing values FIXME: Load from configuration file
-    ui_interval = 200
-    reader_wait = 0.1
+        # Configuration state variables
+        self.configuration_state = ConfigurationState.INVALID_CONFIGURATION
+        try:
+            config = RawConfigParser()
+            with open("config.ini", "r", encoding="utf-8") as configfile:
+                config.read_file(configfile)
+                self.backend_url = config["backend"]["url"]
+                self.registration_name = config["registration"]["name"]
+                self.registration_key = config["registration"]["key"]
+            # FIXME: validation rules for configuration
+            self.configuration_state = ConfigurationState.VALID_CONFIGURATION
+        except Exception:
+            self.configuration_state = ConfigurationState.INVALID_CONFIGURATION
+            self.backend_state = BackendState.BACKEND_NOT_AVAILABLE
+            self.registration_state = RegistrationState.REGISTRATION_FAILED
 
-    # For UI "animation" based on reader event loop iterations
-    iteration = 0
+        if self.registration_state == ConfigurationState.VALID_CONFIGURATION:
+            self.refresh_status_with_backend()
 
-    # The message to display to end user
-    item_data_message = ""
+        # Reader intial state variables
+        self.reader_version: str | None = None
+        self.reader_state: ReaderState = ReaderState.NO_READER_CONNECTED
+        self.active_address: str | None = None
+        self.active_tag: str | None = None
+        self.active_item: str | None = None
+        self.last_printed_tag: str | None = None
+        self.serial_port_number: int = 1
+        self.serial_port: str | None = None
+
+        # Printer initial state variables
+        self.printer_state: PrinterState = PrinterState.NO_PRINTER_CONNECTED
+        self.printer: str | None = None
+        self.printer_identifier: str | None = None
+
+        # Timing values FIXME: Load from configuration file
+        self.ui_interval: int = 200
+        self.reader_wait: float = 0.1
+
+        # For UI "animation" based on reader event loop iterations
+        self.iteration: int = 0
+
+        # The message to display to end user
+        self.item_data_message: str = ""
+
+        super().__init__()
+
+        self.timer = QTimer()
+        self.timer.setInterval(self.ui_interval)
+        self.timer.timeout.connect(self.reader_loop)
+        self.timer.start()
+
+    @Slot(str, str, str)
+    def storeConfiguration(self, backend_url: str, registration_name: str, registration_key: str):
+        """
+        Stores configuration information in a config.ini file.
+
+        Args:
+            backend_url (str): The backend URL
+            registration_name (str): The print station name.
+            registration_key (str): The associated registration key.
+        """
+        try:
+            config = RawConfigParser()
+            config["backend"] = {"url": backend_url}
+            config["registration"] = {
+                "name": registration_name,
+                "key": registration_key,
+            }
+            with open("config.ini", "w", encoding="utf-8") as configfile:
+                config.write(configfile)
+        except Exception:
+            # FIXME: send error to sentry here
+            return
+        self.backend_url = backend_url
+        self.registration_name = registration_name
+        self.registration_key = registration_key
+        self.configuration_state = ConfigurationState.VALID_CONFIGURATION
 
     @classmethod
     def get_internal_ip(cls) -> str | None:
@@ -413,40 +477,40 @@ class Backend(QObject):
             return None
 
     def refresh_status_with_backend(self):
-        self.internal_hostname = socket.gethostname()
-        self.internal_ip_address = self.__class__.get_internal_ip()
-        try:
-            data = {
-                "internal_hostname": f"{self.internal_hostname}",
-                "internal_ip_address": f"{self.internal_ip_address}",
-            }
-            # FIXME: Move hardcoded configuration to config file
-            response = httpx.post(
-                "http://127.0.0.1:8000/status/",
-                data=data,
-                headers={
-                    "x-api-key": self.print_station_registration_key,
-                },
-            )
-            response.raise_for_status()
-            self.backend_state = BackendState.BACKEND_OK
-            self.registration_state = RegistrationState.REGISTRATION_SUCCEEDED
-        except httpx.RequestError:
-            # Backend had a protocol level error
-            self.backend_state = BackendState.NO_BACKEND_RESPONSE
-            self.registration_state = RegistrationState.REGISTRATION_FAILED
-        except httpx.HTTPStatusError:
-            # Backend did respond, but the response status was either 4xx or 5xx
-            self.backend_state = BackendState.BACKEND_ERROR_RESPONSE
-            self.registration_state = RegistrationState.REGISTRATION_FAILED
-
-    def __init__(self):
-        super().__init__()
-        self.refresh_status_with_backend()
-        self.timer = QTimer()
-        self.timer.setInterval(self.ui_interval)
-        self.timer.timeout.connect(self.reader_loop)
-        self.timer.start()
+        if self.configuration_state == ConfigurationState.VALID_CONFIGURATION:
+            self.internal_hostname = socket.gethostname()
+            self.internal_ip_address = self.__class__.get_internal_ip()
+            try:
+                data = {
+                    "internal_hostname": f"{self.internal_hostname}",
+                    "internal_ip_address": f"{self.internal_ip_address}",
+                }
+                response = httpx.post(
+                    f"{self.backend_url}/status",
+                    data=data,
+                    headers={
+                        "x-api-key": self.registration_key,
+                    },
+                )
+                response.raise_for_status()
+                # FIXME: Handle response and update UI
+                # {
+                # 'full_sync_completed_at': '',
+                # 'initialized_at': '2025-07-29T13:34:32.973867+00:00',
+                # 'last_sync_run_completed_at': '2025-07-30T15:32:41.284914+00:00',
+                # 'sync_changes_since': '2025-07-29T14:20:19.261682+00:00',
+                # 'sync_mode': 'SYNC_FULL'
+                # }
+                self.backend_state = BackendState.BACKEND_OK
+                self.registration_state = RegistrationState.REGISTRATION_SUCCEEDED
+            except httpx.RequestError:
+                # Backend had a protocol level error
+                self.backend_state = BackendState.BACKEND_NOT_AVAILABLE
+                self.registration_state = RegistrationState.REGISTRATION_FAILED
+            except httpx.HTTPStatusError:
+                # Backend did respond, but the response status was either 4xx or 5xx
+                self.backend_state = BackendState.BACKEND_OK
+                self.registration_state = RegistrationState.REGISTRATION_FAILED
 
     def send_data(self, data):
         """
@@ -475,7 +539,10 @@ class Backend(QObject):
 
         # Store the previous reader state for use in determining the overall status.
         # Solution for preventing read error scenarios from causing flickering in the UI
+        # FIXME: better solution would be to use transition states
         previousReaderState = self.reader_state
+
+        self.configuration_state_sig.emit(self.configuration_state.name)
 
         # Laptop battery
         battery = psutil.sensors_battery()
@@ -616,12 +683,14 @@ class Backend(QObject):
                                         or self.active_tag.primary_item_identifier
                                         != self.active_item.get("barcode")
                                     ):
-                                        # FIXME: Move hardcoded configuration to config file
-                                        response = httpx.get(
-                                            f"http://127.0.0.1:8000/itemdata/{helmet_rfid_tag.primary_item_identifier}"
+                                        httpResponse = httpx.get(
+                                            f"{self.backend_url}/itemdata/{helmet_rfid_tag.primary_item_identifier}",
+                                            headers={
+                                                "x-api-key": self.registration_key,
+                                            },
                                         )
-                                        response.raise_for_status()
-                                        self.active_item = response.json()
+                                        httpResponse.raise_for_status()
+                                        self.active_item = httpResponse.json()
 
                                     msg = (
                                         "<p>"
@@ -657,7 +726,7 @@ class Backend(QObject):
                                 except httpx.RequestError:
                                     # Backend had a protocol level error
                                     self.reader_state = ReaderState.READER_CONNECTED
-                                    self.backend_state = BackendState.NO_BACKEND_RESPONSE
+                                    self.backend_state = BackendState.BACKEND_NOT_AVAILABLE
                                     self.active_item = None
                                 except httpx.HTTPStatusError as e:
                                     # Backend did respond, but the response status was either 4xx or 5xx
@@ -668,7 +737,8 @@ class Backend(QObject):
                                         self.backend_state = BackendState.BACKEND_ERROR_RESPONSE
                                     self.active_item = None
                                     self.item_data_message = "<p>" f"<b>Virhe: {e}</b>" "</p>"
-                                except Exception:
+                                except Exception as e:
+                                    print(e)
                                     # Error catchall
                                     self.reader_state = ReaderState.READER_CONNECTED
                                     self.backend_state = BackendState.BACKEND_ERROR_RESPONSE
@@ -802,7 +872,7 @@ class Backend(QObject):
             self.overall_state = OverallState.NOT_READY_TO_USE
 
         # Emit print station registration name
-        self.print_station_registration_name_sig.emit(f"{self.print_station_registration_name}")
+        self.registration_name_sig.emit(f"{self.registration_name}")
 
         # Emit state signals to update the UI
         self.backend_state_sig.emit(f"{self.backend_state.name}")
@@ -813,8 +883,9 @@ class Backend(QObject):
 
         # Emit status messages
         if self.backend_state == BackendState.BACKEND_OK:
-            self.backend_statustext_sig.emit("Taustajärjestelmäversio 1.0.0")
-        elif self.backend_state == BackendState.NO_BACKEND_RESPONSE:
+            # FIXME: Display values from post status response
+            self.backend_statustext_sig.emit("Yhteys ok.")
+        elif self.backend_state == BackendState.BACKEND_NOT_AVAILABLE:
             self.backend_statustext_sig.emit("Ei yhteyttä")
         else:
             self.backend_statustext_sig.emit("Virhetilanne.")
@@ -855,7 +926,7 @@ class Backend(QObject):
                 positives.append("RFID-lukija on yhdistetty")
             if self.printer_state == PrinterState.PRINTER_CONNECTED:
                 positives.append("tulostin löytyy")
-            if self.backend_state == BackendState.NO_BACKEND_RESPONSE:
+            if self.backend_state == BackendState.BACKEND_NOT_AVAILABLE:
                 negatives.append("taustajärjestelmä ei vastaa")
                 fixes.append("<li>Varmista, että toimipaikan verkkoyhteys toimii</li>")
             elif self.backend_state == BackendState.BACKEND_ERROR_RESPONSE:
@@ -865,7 +936,7 @@ class Backend(QObject):
                 )
             if self.registration_state == RegistrationState.REGISTRATION_FAILED:
                 negatives.append("tulostusasemalle ei saatu valtuuksia")
-                if self.backend_state is not BackendState.NO_BACKEND_RESPONSE:
+                if self.backend_state is not BackendState.BACKEND_NOT_AVAILABLE:
                     fixes.append(
                         "<li>Pyydä toimipaikan pääkäyttäjää pyytämään tarroitusasemalle valtuudet</li>"
                     )
@@ -927,7 +998,8 @@ class Backend(QObject):
             elif self.backend_state == BackendState.BACKEND_ERROR_RESPONSE:
                 self.message_sig.emit(
                     "<p><b>Virhetilanne</b></p>"
-                    "<p>Niteen tietoja ei saada haettua taustajärjestelmästä taustajärjestelmän palauttaman virheen vuoksi.</p>"
+                    "<p>Niteen tietoja ei saada haettua taustajärjestelmästä"
+                    "taustajärjestelmän palauttaman virheen vuoksi.</p>"
                     "<p><b>Ohjeet:</b></p>"
                     "<ul>"
                     "<li>Odota vähän aikaa ja kokeile samalla tai eri niteellä uudestaan.</li>"

@@ -145,3 +145,5 @@ idea/
 postgresql/
 
 .vscode/
+
+*.ini

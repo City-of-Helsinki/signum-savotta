@@ -13,6 +13,7 @@ ApplicationWindow {
     property QtObject backend
     property string backendStatus: ""
     property string backendStatusText: ""
+    property string configurationStatus: ""
     property string registrationStatus: ""
     property string registrationStatusText: ""
     property string readerStatus: ""
@@ -22,7 +23,7 @@ ApplicationWindow {
     property string overallStatus: ""
     property string message: ""
     property int iteration: 1
-    property string printStationRegistrationName: ""
+    property string registrationName: ""
     property bool batteryCharging: false
     property int batteryPercentage: 100
     property bool configMode: false
@@ -42,6 +43,12 @@ ApplicationWindow {
         }
         function onBackend_statustext_sig(msg) {
             mainWindow.backendStatusText = msg;
+        }
+        function onConfiguration_state_sig(msg) {
+            mainWindow.configurationStatus = msg;
+            if(msg == "INVALID_CONFIGURATION") {
+                mainWindow.configMode = true;
+            }
         }
         function onRegistration_state_sig(msg) {
             mainWindow.registrationStatus = msg;
@@ -67,8 +74,8 @@ ApplicationWindow {
         function onMessage_sig(msg) {
             mainWindow.message = msg;
         }
-        function onPrint_station_registration_name_sig(msg) {
-            mainWindow.printStationRegistrationName = msg;
+        function onRegistration_name_sig(msg) {
+            mainWindow.registrationName = msg;
         }
         function onBatterycharging_sig(msg) {
             mainWindow.batteryCharging = msg;
@@ -87,6 +94,11 @@ ApplicationWindow {
     Action {
         id: saveConfig
         onTriggered: {
+            mainWindow.backend.storeConfiguration(
+                backendUrlField.text,
+                registrationNameField.text,
+                registrationKeyField.text
+            )
             mainWindow.configMode = false
         }
     }
@@ -198,12 +210,12 @@ ApplicationWindow {
             color: "black"
         }
         Text {
-            id: printStationName
+            id: registrationNameHeader
             font.family: helsinkiGrotesk.name
             anchors.verticalCenter: parent.verticalCenter
             anchors.right: batteryStatus.left
             anchors.rightMargin: 20
-            text: mainWindow.printStationRegistrationName
+            text: mainWindow.registrationName
             font.pixelSize: 24
             color: "white"
         }
@@ -405,23 +417,32 @@ ApplicationWindow {
                     font.family: helsinkiGrotesk.name
                 }
                 TextField {
+                    id: backendUrlField
                     color: "#333333"
                     font.family: helsinkiGrotesk.name
-                    font.pixelSize: 16
-                    height: 18
+                    font.pixelSize: 20
+                    height: 24
+                    placeholderText: "Taustajärjestelmän osoite"
+                    width: parent.width
+                }
+                TextField {
+                    id: registrationNameField
+                    color: "#333333"
+                    font.family: helsinkiGrotesk.name
+                    font.pixelSize: 20
+                    height: 24
                     placeholderText: "Tulostusaseman nimi"
                     width: parent.width
                 }
-
                 TextField {
+                    id: registrationKeyField
                     color: "#333333"      
                     font.family: helsinkiGrotesk.name
-                    font.pixelSize: 16
-                    height: 18
-                    placeholderText: "API-avain"
+                    font.pixelSize: 20
+                    height: 24
+                    placeholderText: "Rekisteröintiavain"
                     width: parent.width
                 }
-
                 Button {
                     font.family: helsinkiGrotesk.name
                     font.pixelSize: 18
