@@ -33,7 +33,7 @@ from models.base import Base
 from models.client import Client, ClientType
 from models.sierra_item import SierraItem
 from schemas import sierra_item_schema
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.inspection import inspect
@@ -47,7 +47,7 @@ log_formatter = logging.Formatter(
 stream_handler.setFormatter(log_formatter)
 logger.addHandler(stream_handler)
 
-FULL_SYNC_BATCH_SIZE = int(os.getenv("FULL_SYNC_BATCH_SIZE", 100000))
+FULL_SYNC_BATCH_SIZE = int(os.getenv("FULL_SYNC_BATCH_SIZE", 80000))
 
 local_timezone = ZoneInfo("localtime")
 
@@ -227,13 +227,60 @@ async def get_healthz():
 
 
 @app.post("/status", tags=["status"])
-def post_status(
+async def post_status(
     internal_hostname: Annotated[str, Form()],
     internal_ip_address: Annotated[str, Form()],
     client: Annotated[Client, Depends(allow_printer_client_only)],
 ):
-    """ """
-    return {"status": "OK"}
+    """
+    This endpoint is intended for authorized printer clients to report their internal
+    hostname and IP address. It updates the client's `last_seen_at`, `internal_hostname`,
+    and `internal_ip_address` fields in the database. In response, it returns the current
+    backend synchronization state.
+
+    Args:
+        internal_hostname (str): The hostname of the client machine.
+        internal_ip_address (str): The internal IP address of the client.
+        client (Client): The authenticated client, restricted to SIGNUM_PRINTER type.
+
+    Returns:
+        JSONResponse: A JSON object containing backend synchronization state fields:
+            - full_sync_completed_at
+            - initialized_at
+            - last_sync_run_completed_at
+            - sync_changes_since
+            - sync_mode
+
+    Raises:
+        HTTPException: If the client is not authorized or the database operation fails.
+    """
+
+    async with async_sessionmaker(autocommit=False, bind=engine)() as session:
+        async with session.begin():
+            stmt = (
+                await update(Client)
+                .where(Client.id == client.id)
+                .values(
+                    internal_hostname=internal_hostname,
+                    internal_ip_address=internal_ip_address,
+                    last_seen_at=datetime.now(local_timezone),
+                )
+            )
+            await session.execute(stmt)
+            result = await session.execute(select(BackendState))
+            backend_state: BackendState = result.scalar_one_or_none()
+
+            await session.commit()
+    return JSONResponse(
+        status_code=200,
+        content={
+            "full_sync_completed_at": backend_state.full_sync_completed_at,
+            "initialized_at": backend_state.initialized_at,
+            "last_sync_run_completed_at": backend_state.last_sync_run_completed_at,
+            "sync_changes_since": backend_state.sync_changes_since,
+            "sync_mode": backend_state.sync_mode,
+        },
+    )
 
 
 @app.get(
@@ -337,19 +384,25 @@ async def get_sync_configuration(request: Request):
                         f"{FULL_SYNC_BATCH_SIZE}, last_synced_id: {last_synced_id}"
                     )
                 )
-                return {
-                    "sync_mode": backend_state.sync_mode,
-                    "batch_size": FULL_SYNC_BATCH_SIZE,
-                    "last_synced_id": last_synced_id,
-                }
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "sync_mode": backend_state.sync_mode,
+                        "batch_size": FULL_SYNC_BATCH_SIZE,
+                        "last_synced_id": last_synced_id,
+                    },
+                )
             elif backend_state.sync_mode == SyncMode.SYNC_CHANGES:
                 logger.info(
                     f"{backend_state.sync_mode} with timestamp: {backend_state.sync_changes_since}"
                 )
-                return {
-                    "sync_mode": backend_state.sync_mode,
-                    "timestamp": backend_state.sync_changes_since.isoformat(),
-                }
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "sync_mode": backend_state.sync_mode,
+                        "timestamp": backend_state.sync_changes_since.isoformat(),
+                    },
+                )
             else:
                 state_str = ", ".join(
                     f"{attr.key}: {getattr(backend_state, attr.key)}"
@@ -483,8 +536,7 @@ async def post_data_sync_batch(
     except Exception as e:
         logger.error(e)
         raise HTTPException(status_code=500, detail="Internal server error")
-
-    return {"upserted": len(sierra_items)}
+    return JSONResponse(status_code=200, content={"upserted": len(sierra_items)})
 
 
 log_config = uvicorn.config.LOGGING_CONFIG
