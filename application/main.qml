@@ -5,10 +5,10 @@ import QtQuick.Effects
 ApplicationWindow {
     id: mainWindow
     visible: true
-    // visibility: Window.Maximized
+    visibility: Window.Maximized
     width: 1366
     height: 768
-    // flags: Qt.FramelessWindowHint, Qt.Window | Qt.WindowStaysOnTopHint
+    flags: Qt.FramelessWindowHint, Qt.Window | Qt.WindowStaysOnTopHint
 
     property QtObject backend
     property string backendStatus: ""
@@ -25,6 +25,7 @@ ApplicationWindow {
     property string printStationRegistrationName: ""
     property bool batteryCharging: false
     property int batteryPercentage: 100
+    property bool configMode: false
 
     FontLoader {
         id: helsinkiGrotesk
@@ -75,7 +76,19 @@ ApplicationWindow {
         function onBatterypercentage_sig(msg) {
             mainWindow.batteryPercentage = msg;
         }
+    }
 
+    Shortcut {
+        enabled: true
+        sequence: "Ctrl+C,Ctrl+F"
+        onActivated: mainWindow.configMode = true
+    }
+
+    Action {
+        id: saveConfig
+        onTriggered: {
+            mainWindow.configMode = false
+        }
     }
 
     component StatusBox: Rectangle {
@@ -357,4 +370,68 @@ ApplicationWindow {
 
     }
 
+    Item {
+        id: containerItem
+        anchors.fill: parent
+        width: parent.width
+        height: parent.height
+
+        Rectangle {
+            id: configBackgroundOverlay
+            anchors.fill: parent
+            color: "#ffffff"
+            opacity: 0.5
+            visible: mainWindow.configMode
+        }
+
+        Rectangle {
+            anchors.margins: 100
+            anchors.fill: parent
+            color: "#F2F2F2"
+            border.color: "#333333"
+            border.width: 4
+            visible: mainWindow.configMode
+
+
+            Column {
+                anchors.centerIn: parent
+                width: parent.width - 100
+                spacing: 20
+                Text {
+                    color: "#333333"
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "Asetukset"
+                    font.pixelSize: 32
+                    font.family: helsinkiGrotesk.name
+                }
+                TextField {
+                    color: "#333333"
+                    font.family: helsinkiGrotesk.name
+                    font.pixelSize: 16
+                    height: 18
+                    placeholderText: "Tulostusaseman nimi"
+                    width: parent.width
+                }
+
+                TextField {
+                    color: "#333333"      
+                    font.family: helsinkiGrotesk.name
+                    font.pixelSize: 16
+                    height: 18
+                    placeholderText: "API-avain"
+                    width: parent.width
+                }
+
+                Button {
+                    font.family: helsinkiGrotesk.name
+                    font.pixelSize: 18
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    height: 32
+                    text: "Tallenna"
+                    width: 200
+                    action: saveConfig
+                }
+            }
+        }
+    }
 }
