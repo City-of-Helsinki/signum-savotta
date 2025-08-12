@@ -86,9 +86,6 @@ class SierraItem(Base):
         ix_barcode: Hash index on the `barcode` column for fast lookups.
     """
 
-    # Override index_columns from parent class Base so that batch insert works
-    index_columns: List[str] = ["item_record_id"]
-
     __tablename__ = "sierra_item"
     __table_args__ = (Index("ix_barcode", "barcode", postgresql_using="hash"),)
 

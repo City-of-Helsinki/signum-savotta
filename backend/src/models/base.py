@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncAttrs, AsyncSession
 from sqlalchemy.inspection import inspect
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Mapper
 from sqlalchemy.types import JSON
 
 
@@ -20,22 +20,16 @@ class Base(AsyncAttrs, DeclarativeBase):
     }
     pass
 
-    # Override index_columns in classes that inherit this class
-    index_columns: List[str] = []
-
     @classmethod
     async def upsert_batch(
-        cls,
-        session: AsyncSession,
-        dicts: List[dict],
-        return_upserted: bool = False,
+        cls, session: AsyncSession, dicts: List[dict], return_upserted: bool = False
     ):
         """
         Performs a batch upsert (insert or update) of the provided dictionaries into the database.
 
-        This method splits the input list of dictionaries into batches to avoid exceeding PostgreSQL's
+        This method splits the input list of dictionaries into batches to avoid exceeding asyncpg
         parameter limit (32,767). Each batch is inserted using a PostgreSQL `ON CONFLICT DO UPDATE`
-        clause, which updates existing records based on the `item_record_id` primary key.
+        clause, which updates existing records based on the index columns.
 
         Args:
             session (AsyncSession): The SQLAlchemy asynchronous session used for database operations.
@@ -44,26 +38,23 @@ class Base(AsyncAttrs, DeclarativeBase):
 
         Returns:
             Optional[List[cls]]: A list of upserted ORM objects if `return_upserted` is True, otherwise None.
-
-        Note:
-            - The method does not return the upserted objects.
-            - This method assumes that `item_record_id` is the unique identifier for conflict resolution.
         """
 
-        mapper = inspect(cls)
-        max_dicts_per_batch = 32767 // len(mapper.attrs)
+        mapper: Mapper = inspect(cls)
+        # FIXME: PostgreSQL has a native parameter limit of 65535. Update if asyncpg starts to support it.
+        max_dicts_per_batch = 32767 // len(mapper.columns)
         batches = [
             dicts[i : i + max_dicts_per_batch] for i in range(0, len(dicts), max_dicts_per_batch)
         ]
-
+        upserted = []
         for batch in batches:
             stmt = insert(cls).values(batch)
             stmt = stmt.on_conflict_do_update(
-                index_elements=[getattr(cls, col) for col in cls.index_columns],
+                index_elements=[getattr(cls, col.name) for col in mapper.primary_key],
                 set_={
                     col.name: stmt.excluded[col.name]
-                    for col in cls.__table__.columns
-                    if col.name not in cls.index_columns
+                    for col in mapper.columns
+                    if col not in mapper.primary_key
                 },
             ).returning(cls)
             if return_upserted:
@@ -71,7 +62,10 @@ class Base(AsyncAttrs, DeclarativeBase):
                     select(cls).from_statement(stmt).execution_options(populate_existing=True)
                 )
                 result = await session.execute(orm_stmt)
-                return await result.scalars().all()
+                upserted.append(result.scalars().all())
             else:
                 await session.execute(stmt)
-                return None
+        if return_upserted:
+            return upserted
+        else:
+            return None
