@@ -18,19 +18,27 @@ from sqlalchemy import BigInteger, bindparam, func, select, text
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+# Configuration from environment variables
+BACKEND_URL = os.getenv("BACKEND_URL")
+ETL_CLIENT_API_KEY = os.getenv("ETL_CLIENT_API_KEY")
+SYNC_JOB_INTERVAL_SECONDS = int(os.getenv("SYNC_JOB_INTERVAL_SECONDS", 30))
+SYNC_JOB_MISFIRE_GRACE_TIME_SECONDS = int(os.getenv("SYNC_JOB_MISFIRE_GRACE_TIME_SECONDS", 30))
+MAX_SYNC_DELTA_MINUTES = int(os.getenv("MAX_SYNC_DELTA_MINUTES", 60))
+LOG_LEVEL = os.getenv("LOG_LEVEL", default="DEBUG")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = int(os.getenv("DB_PORT"))
+DB_NAME = os.getenv("DB_NAME")
+
 logger = logging.getLogger("etl.stdout")
-logger.setLevel(logging.getLevelName(os.getenv("LOG_LEVEL", default="DEBUG")))
+logger.setLevel(logging.getLevelName(LOG_LEVEL))
 stream_handler = logging.StreamHandler(sys.stdout)
 log_formatter = logging.Formatter(
     "%(asctime)s [%(levelname)s] [%(processName)s: %(process)d] [%(threadName)s: %(thread)d] %(name)s: %(message)s"
 )
 stream_handler.setFormatter(log_formatter)
 logger.addHandler(stream_handler)
-
-# Configuration
-BACKEND_URL = os.getenv("BACKEND_URL")
-ETL_CLIENT_API_KEY = os.getenv("ETL_CLIENT_API_KEY")
-MAX_SYNC_DELTA_MINUTES = 60
 
 local_timezone = ZoneInfo("localtime")
 
@@ -51,7 +59,7 @@ item_number AS (
     SELECT
         id,
         record_last_updated_gmt as item_record_last_updated_gmt,
-        concat(concat('i',record_num),agency_code_num) as item_number
+        record_num as item_number
     FROM sierra_view.record_metadata
     WHERE record_type_code = 'i'
     AND id IN (SELECT item.record_id FROM item)
@@ -84,7 +92,7 @@ bib_number AS (
     SELECT
         id,
         record_last_updated_gmt as bib_record_last_updated_gmt,
-        concat(concat('b',record_num),agency_code_num) as bib_number
+        record_num as bib_number
     FROM sierra_view.record_metadata
     WHERE record_type_code = 'b'
     AND id IN (SELECT bib_item_link.bib_record_id FROM bib_item_link)
@@ -256,13 +264,13 @@ classification AS (
     ORDER BY record_id ASC
 ),
 item_number AS (
-    SELECT id, concat(concat('i',record_num),agency_code_num) as item_number
+    SELECT id, record_num as item_number
     FROM sierra_view.record_metadata
     WHERE record_type_code = 'i'
     AND id IN (SELECT bib_item_link.item_record_id FROM bib_item_link)
 ),
 bib_number AS (
-    SELECT id, concat(concat('b',record_num),agency_code_num) as bib_number
+    SELECT id, record_num as bib_number
     FROM sierra_view.record_metadata
     WHERE record_type_code = 'b'
     AND id IN (SELECT bib_item_link.bib_record_id FROM bib_item_link)
@@ -354,11 +362,11 @@ async def task():
             engine = create_async_engine(
                 URL.create(
                     drivername="postgresql+asyncpg",
-                    username=os.getenv("DB_USER"),
-                    password=os.getenv("DB_PASSWORD"),
-                    host=os.getenv("DB_HOST"),
-                    port=int(os.getenv("DB_PORT")),
-                    database=os.getenv("DB_DATABASE"),
+                    username=DB_USER,
+                    password=DB_PASSWORD,
+                    host=DB_HOST,
+                    port=DB_PORT,
+                    database=DB_NAME,
                 ),
                 connect_args={"server_settings": {"application_name": "signum-savotta-etl"}},
                 echo=False,
@@ -474,7 +482,12 @@ async def main():
     main
     """
     scheduler = AsyncIOScheduler(job_defaults={"coalesce": True, "max_instances": 1})
-    scheduler.add_job(task, "interval", seconds=30, misfire_grace_time=10)
+    scheduler.add_job(
+        task,
+        "interval",
+        seconds=SYNC_JOB_INTERVAL_SECONDS,
+        misfire_grace_time=SYNC_JOB_MISFIRE_GRACE_TIME_SECONDS,
+    )
     scheduler.start()
     try:
         while True:

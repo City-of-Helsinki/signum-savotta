@@ -1,3 +1,7 @@
+"""
+SQLAlchemy ORM base module with asynchronous support and PostgreSQL-specific utilities.
+"""
+
 from __future__ import annotations
 
 from typing import Any, List
@@ -12,13 +16,37 @@ from sqlalchemy.types import JSON
 
 class Base(AsyncAttrs, DeclarativeBase):
     """
-    Base
+    Base class for all ORM models using SQLAlchemy 2.0 with asynchronous support.
+
+    This class combines SQLAlchemy's `DeclarativeBase` for declarative model definitions
+    with `AsyncAttrs` to enable asynchronous operations on ORM instances.
+
+    Features:
+    ---------
+    - Defines a custom `type_annotation_map` to automatically map Python `dict[str, Any]`
+      annotations to PostgreSQL's `JSON` type.
+    - Provides a reusable `upsert_batch` class method for efficient bulk upserts using
+      PostgreSQL's `ON CONFLICT DO UPDATE` clause.
+    - Handles batching to avoid exceeding PostgreSQL's parameter limit when using asyncpg.
+
+    Usage:
+    ------
+    Subclass this `Base` to define your ORM models. Use `upsert_batch` to insert or update
+    multiple records asynchronously in a single transaction.
+
+    Example:
+    --------
+    class MyModel(Base):
+        __tablename__ = "my_table"
+        id = Column(Integer, primary_key=True)
+        data = Column(JSON)
+
+    await MyModel.upsert_batch(session, [{"id": 1, "data": {...}}, ...])
     """
 
     type_annotation_map = {
         dict[str, Any]: JSON,
     }
-    pass
 
     @classmethod
     async def upsert_batch(
@@ -56,10 +84,12 @@ class Base(AsyncAttrs, DeclarativeBase):
                     for col in mapper.columns
                     if col not in mapper.primary_key
                 },
-            ).returning(cls)
+            )
             if return_upserted:
                 orm_stmt = (
-                    select(cls).from_statement(stmt).execution_options(populate_existing=True)
+                    select(cls)
+                    .from_statement(stmt.returning(cls))
+                    .execution_options(populate_existing=True)
                 )
                 result = await session.execute(orm_stmt)
                 upserted.append(result.scalars().all())

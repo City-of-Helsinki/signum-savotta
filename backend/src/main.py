@@ -3,18 +3,24 @@ FastAPI based backend for Signum-savotta signum (shelf mark) sticker printing ap
 """
 
 import asyncio
+import base64
 import gzip
 import logging
 import os
 import sys
+import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
+import httpx
 import pandas as pd
 import uvicorn
+from apscheduler.executors.asyncio import AsyncIOExecutor
+from apscheduler.jobstores.memory import MemoryJobStore
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import (
     Depends,
     FastAPI,
@@ -23,7 +29,6 @@ from fastapi import (
     Header,
     HTTPException,
     Path,
-    Request,
     Response,
     UploadFile,
 )
@@ -38,16 +43,41 @@ from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.inspection import inspect
 
+# Configuration from environment variables
+SIERRA_API_ENDPOINT = os.getenv("SIERRA_API_ENDPOINT")
+SIERRA_API_CLIENT_POOL_SIZE = int(os.getenv("SIERRA_API_CLIENT_POOL_SIZE"))
+SIERRA_API_CLIENT_TIMEOUT_SECONDS = int(os.getenv("SIERRA_API_CLIENT_TIMEOUT_SECONDS", default=10))
+SIERRA_API_CLIENT_RETRIES = int(os.getenv("SIERRA_API_CLIENT_RETRIES", default=3))
+SIERRA_API_CLIENT_KEY = os.getenv("SIERRA_API_CLIENT_KEY")
+SIERRA_API_CLIENT_SECRET = os.getenv("SIERRA_API_CLIENT_SECRET")
+SIERRA_UPDATE_INTERVAL_SECONDS = int(os.getenv("SIERRA_UPDATE_INTERVAL_SECONDS", default=30))
+SIERRA_UPDATE_MISFIRE_GRACE_TIME_SECONDS = int(
+    os.getenv("SIERRA_UPDATE_MISFIRE_GRACE_TIME_SECONDS", default=10)
+)
+SIERRA_UPDATE_BATCH_SIZE_LIMIT = int(os.getenv("SIERRA_UPDATE_BATCH_SIZE_LIMIT", default=20))
+SIERRA_UPDATE_SET_IUSE3 = bool(os.getenv("SIERRA_UPDATE_SET_IUSE3", default=True))
+SIERRA_UPDATE_SET_INVDA = bool(os.getenv("SIERRA_UPDATE_SET_INVDA", default=True))
+FULL_SYNC_BATCH_SIZE = int(os.getenv("FULL_SYNC_BATCH_SIZE", 80000))
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = int(os.getenv("DB_PORT"))
+DB_NAME = os.getenv("DB_NAME")
+LOG_LEVEL = os.getenv("LOG_LEVEL", default="DEBUG")
+
+sierra_http_transport = httpx.HTTPTransport(retries=SIERRA_API_CLIENT_RETRIES)
+sierra_http_client = httpx.Client(
+    transport=sierra_http_transport,
+)
+
 logger = logging.getLogger("backend.stdout")
-logger.setLevel(logging.getLevelName(os.getenv("LOG_LEVEL", default="DEBUG")))
+logger.setLevel(logging.getLevelName(LOG_LEVEL))
 stream_handler = logging.StreamHandler(sys.stdout)
 log_formatter = logging.Formatter(
     "%(asctime)s [%(levelname)s] [%(processName)s: %(process)d] [%(threadName)s: %(thread)d] %(name)s: %(message)s"
 )
 stream_handler.setFormatter(log_formatter)
 logger.addHandler(stream_handler)
-
-FULL_SYNC_BATCH_SIZE = int(os.getenv("FULL_SYNC_BATCH_SIZE", 80000))
 
 local_timezone = ZoneInfo("localtime")
 
@@ -56,14 +86,21 @@ local_timezone = ZoneInfo("localtime")
 engine = create_async_engine(
     URL.create(
         drivername="postgresql+asyncpg",
-        username=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        host=os.getenv("DB_HOST"),
-        port=int(os.getenv("DB_PORT")),
-        database=os.getenv("DB_NAME"),
+        username=DB_USER,
+        password=DB_PASSWORD,
+        host=DB_HOST,
+        port=DB_PORT,
+        database=DB_NAME,
     ),
     connect_args={"server_settings": {"application_name": "signum-savotta-backend"}},
     echo=False,
+)
+
+
+scheduler = AsyncIOScheduler(
+    jobstores={"default": MemoryJobStore()},
+    executors={"default": AsyncIOExecutor()},
+    job_defaults={"coalesce": True, "max_instances": 1},
 )
 
 
@@ -110,8 +147,138 @@ async def lifespan(app: FastAPI):
                 for attr in inspect(BackendState).attrs
             )
             logger.info(("Persistent backend state: " f"{state_str}"))
+
+    scheduler.add_job(
+        send_to_sierra,
+        "interval",
+        id="send_to_sierra",
+        replace_existing=True,
+        seconds=SIERRA_UPDATE_INTERVAL_SECONDS,
+        misfire_grace_time=SIERRA_UPDATE_MISFIRE_GRACE_TIME_SECONDS,
+    )
+    scheduler.start()
+
     yield
     await engine.dispose()
+    scheduler.remove_job("send_to_sierra")
+    scheduler.shutdown(wait=False)
+
+
+async def send_to_sierra():
+    """
+    Sends a batch of SierraItem records to the Sierra API for updates.
+    Called from backgroudtask scheduled by APScheduler.
+
+    This function performs the following steps:
+    1. Queries the database for SierraItem records that are marked for update (`in_update_queue == True`).
+    2. Limits the batch size based on the `SIERRA_UPDATE_BATCH_SIZE_LIMIT` to avoid overloading the API.
+    3. Authenticates with the Sierra API using Basic Auth and retrieves an access token.
+    4. Iterates through each item and:
+       - Fetches the current `fixedFields` from the Sierra API.
+       - Optionally updates specific fields (`IUSE3` and `INVDA`) based on configuration flags.
+       - Sends the updated fields back to the Sierra API using a PUT request.
+    5. Logs any errors encountered during the update process.
+
+    Notes:
+    ------
+    - Uses asynchronous SQLAlchemy sessions and HTTPX for non-blocking I/O.
+    - Encodes client credentials using Base64 for Basic Auth.
+
+    Exceptions:
+    -----------
+    - Any exceptions during API communication or data processing are caught and logged,
+      including the item record ID for traceability.
+
+    Dependencies:
+    -------------
+    - `SIERRA_API_CLIENT_KEY`, `SIERRA_API_CLIENT_SECRET`, `SIERRA_API_ENDPOINT`
+    - `SIERRA_UPDATE_BATCH_SIZE_LIMIT`, `SIERRA_UPDATE_SET_IUSE3`, `SIERRA_UPDATE_SET_INVDA`
+    - `sierra_http_client`, `logger`, `async_sessionmaker`, `engine`, `SierraItem`
+
+    Returns:
+    --------
+    None
+    """
+    start_time = time.time()
+    async with async_sessionmaker(engine)() as session:
+        async with session.begin():
+            stmt = select(SierraItem).where(SierraItem.in_update_queue == True)  # noqa: E712
+            if SIERRA_UPDATE_BATCH_SIZE_LIMIT > 0:
+                stmt = stmt.limit(SIERRA_UPDATE_BATCH_SIZE_LIMIT)
+            result = await session.execute(stmt)
+            items = result.scalars().all()
+            base64_encoded_key_and_secret = base64.b64encode(
+                f"{SIERRA_API_CLIENT_KEY}:{SIERRA_API_CLIENT_SECRET}".encode("utf-8")
+            ).decode("utf-8")
+            authorization_header = f"Basic {base64_encoded_key_and_secret}"
+            try:
+                response: httpx.Response = sierra_http_client.post(
+                    url=f"{SIERRA_API_ENDPOINT}/token",
+                    headers={"Authorization": authorization_header},
+                )
+                response.raise_for_status()
+            except Exception as e:
+                logger.error(f"Error {e} while getting Sierra access token.")
+            access_token = response.json()["access_token"]
+            updated = 0
+            for item in items:
+                try:
+                    try:
+                        response = sierra_http_client.get(
+                            url=f"{SIERRA_API_ENDPOINT}/items/{item.item_number}?fields=fixedFields",
+                            headers={"Authorization": f"Bearer {access_token}"},
+                        )
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as e:
+                        raise RuntimeError(f"Sierra item get failed {e}")
+                    fetched_fixed_fields = response.json()["fixedFields"]
+                    fixed_fields = {}
+                    json = {}
+                    if SIERRA_UPDATE_SET_IUSE3:
+                        label = (
+                            fetched_fixed_fields["93"]["label"]
+                            if fetched_fixed_fields.get("93")
+                            else ""
+                        )
+                        fixed_fields["93"] = {"label": label, "value": "1"}
+                        json["fixedFields"] = fixed_fields
+                    if SIERRA_UPDATE_SET_INVDA:
+                        json["inventoryDate"] = (
+                            datetime.now(timezone.utc)
+                            .replace(microsecond=0)
+                            .isoformat()
+                            .replace("+00:00", "Z")
+                        )
+                    try:
+                        response = sierra_http_client.put(
+                            json=json,
+                            url=f"{SIERRA_API_ENDPOINT}/items/{item.item_number}",
+                            headers={"Authorization": f"Bearer {access_token}"},
+                        )
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as e:
+                        raise RuntimeError(
+                            f"Sierra item put failed {e.request.content.decode("utf-8")}"
+                        )
+                    result = await session.execute(
+                        update(SierraItem)
+                        .where(SierraItem.item_record_id == item.item_record_id)
+                        .values({"in_update_queue": False})
+                        .returning(SierraItem)
+                    )
+                    updated_rows = result.scalars().all()
+                    if len(updated_rows) == 1:
+                        updated = updated + 1
+                    else:
+                        raise ValueError(
+                            f"Update with item number yielded {len(updated_rows)} results. Should always be 1."
+                        )
+                except Exception as e:
+                    logger.error(f"Error {e} while updating Sierra item number {item.item_number}")
+                    pass
+            logger.info(
+                f"Sierra update finished in {time.time() - start_time} seconds. Updated {updated} item records"
+            )
 
 
 async def allow_any_valid_client(x_api_key: Annotated[str, Header()]):
@@ -162,7 +329,9 @@ async def allow_etl_client_only(client: Annotated[Client, Depends(allow_any_vali
         HTTPException: If the client is not of type ETL.
     """
 
-    if client.client_type != ClientType.ETL:
+    if client is None:
+        raise HTTPException(status_code=403, detail="Invalid x-api-key")
+    elif client.client_type != ClientType.ETL:
         raise HTTPException(status_code=403, detail="Invalid x-api-key")
     else:
         return client
@@ -186,7 +355,9 @@ async def allow_printer_client_only(client: Annotated[Client, Depends(allow_any_
         HTTPException: If the client is not of type SIGNUM_PRINTER.
     """
 
-    if client.client_type != ClientType.SIGNUM_PRINTER:
+    if client is None:
+        raise HTTPException(status_code=403, detail="Invalid x-api-key")
+    elif client.client_type != ClientType.SIGNUM_PRINTER:
         raise HTTPException(status_code=403, detail="Invalid x-api-key")
     else:
         return client
@@ -305,7 +476,7 @@ async def post_status(
 )
 async def get_item_data(
     barcode: str = Path(
-        ..., title="The ID of the item to retrieve", pattern=r"^[0-9]{14,16}\w{0,1}$"
+        ..., title="The barcode of the item to retrieve", pattern=r"^[0-9]{14,16}\w{0,1}$"
     )
 ):
     """
@@ -343,6 +514,66 @@ async def get_item_data(
             else:
                 logger.info(f"sierra: {sierra_item.best_title}")
                 return sierra_item
+
+
+@app.put(
+    "/itemdata/{barcode}",
+    tags=["item"],
+    dependencies=[Depends(allow_printer_client_only)],
+)
+async def put_item_data(
+    barcode: str = Path(
+        ..., title="The barcode of the item to update", pattern=r"^[0-9]{14,16}\w{0,1}$"
+    )
+):
+    """
+    Marks a SierraItem record for update by setting its `in_update_queue` flag to True.
+
+    This endpoint is intended to be called by authorized printer clients to signal that
+    an item identified by its barcode should be updated in Sierra via a background process.
+
+    Parameters:
+    -----------
+    barcode : str
+        The barcode of the item to be marked for update. Must match the pattern:
+        14–16 digits optionally followed by one alphanumeric character.
+
+    Behavior:
+    ---------
+    - Executes an asynchronous SQLAlchemy `UPDATE` statement to set `in_update_queue = True`
+      for the matching SierraItem.
+    - Uses `.returning()` to confirm whether any rows were affected.
+    - Returns HTTP 200 with `{"updated": True}` if the item was found and updated.
+    - Returns HTTP 404 with `{"updated": False}` if no matching item was found.
+
+    Security:
+    ---------
+    - Access is restricted to clients authorized via the `allow_printer_client_only` dependency.
+
+    Returns:
+    --------
+    JSONResponse
+        A JSON object indicating whether the update was successful.
+    """
+
+    async with async_sessionmaker(autocommit=False, bind=engine)() as session:
+        async with session.begin():
+            result = await session.execute(
+                update(SierraItem)
+                .where(SierraItem.barcode == barcode)
+                .values({"in_update_queue": True})
+                .returning(SierraItem)
+            )
+            updated_rows = result.scalars().all()
+            if updated_rows:
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "updated": True,
+                    },
+                )
+            else:
+                raise HTTPException(status_code=404, detail="Item not found")
 
 
 @app.get("/sync", tags=["sync"], dependencies=[Depends(allow_etl_client_only)])

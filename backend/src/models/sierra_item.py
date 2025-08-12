@@ -5,12 +5,21 @@ SQLAlchemy model for item data synchronized from Sierra via ETL component
 import json
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 
 import regex
 import uroman as ur
 from models.base import Base
-from sqlalchemy import JSON, BigInteger, DateTime, Index, SmallInteger, String, Text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Index,
+    SmallInteger,
+    String,
+    Text,
+)
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,20 +36,20 @@ def signumize(content, skip=0):
         skip (int): Number of characters to skip from the beginning.
 
     Returns:
-        str: A cleaned, capitalized string of up to three characters.
+        str: A cleaned, uppercase string of up to three characters.
 
     Raises:
         AttributeError: If no valid characters are found.
     """
 
     content = f"{content}"
-    cleaned = regex.sub(r"[^\p{Latin}0-9]", "", content[skip : len(content)]).capitalize()
+    cleaned = regex.sub(r"[^\p{Latin}0-9]", "", content[skip : len(content)]).upper()
     if len(cleaned) == 0:
         cleaned = regex.sub(
             r"[^\p{Latin}0-9]",
             "",
             str(ur.romanize_string(s=content[skip : len(content)], rom_format=ur.RomFormat.STR)),
-        ).capitalize()
+        ).upper()
         if len(cleaned) == 0:
             raise AttributeError("Signum is empty.")
     return f"{cleaned[0 : 3 if len(cleaned) >= 3 else len(cleaned)]}"
@@ -72,15 +81,10 @@ class SierraItem(Base):
         shelfmark_json (Optional[str]): JSON-encoded MARC metadata used to derive
             the three-letter alphabetic sorting string (pääsana).
         updated_at (datetime): Timestamp of the last update.
-        times_printed (int): Times the signum has been printed
+        in_update_queue (bool): If true, the item has been printer and waiting to be updated to Sierra.
 
     Hybrid Properties:
         shelfmark (str): A three-letter string used for alphabetic sorting, derived from MARC fields.
-
-    Class Methods:
-        upsert_batch(session: AsyncSession, dicts: List[dict]):
-            Performs a batch upsert of item records into the database using PostgreSQL's
-            ON CONFLICT DO UPDATE clause.
 
     Indexes:
         ix_barcode: Hash index on the `barcode` column for fast lookups.
@@ -103,7 +107,7 @@ class SierraItem(Base):
     classification: Mapped[Optional[str]] = mapped_column("classification", Text)
     shelfmark_json: Mapped[Optional[str]] = mapped_column("shelfmark_json", JSON)
     updated_at: Mapped[datetime] = mapped_column("updated_at", DateTime(timezone=True))
-    times_printed: Mapped[int] = mapped_column("times_printed", SmallInteger, default=0)
+    in_update_queue: Mapped[bool] = mapped_column("in_update_queue", Boolean, default=False)
 
     @hybrid_property
     def shelfmark(self) -> str:

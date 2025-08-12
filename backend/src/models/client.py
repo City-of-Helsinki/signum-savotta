@@ -1,6 +1,10 @@
+"""
+SQLAlchemy model for client
+"""
+
 import enum
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 
 from models.base import Base
 from sqlalchemy import BigInteger, DateTime, Enum, Index, String
@@ -26,5 +30,3 @@ class Client(Base):
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(
         "last_seen_at", DateTime(timezone=True)
     )
-
-    index_columns: List[str] = ["id"]
