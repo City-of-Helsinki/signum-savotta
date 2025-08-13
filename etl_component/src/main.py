@@ -18,6 +18,8 @@ from sqlalchemy import BigInteger, bindparam, func, select, text
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+# FIXME: Add Sentry
+
 # Configuration from environment variables
 BACKEND_URL = os.getenv("BACKEND_URL")
 ETL_CLIENT_API_KEY = os.getenv("ETL_CLIENT_API_KEY")

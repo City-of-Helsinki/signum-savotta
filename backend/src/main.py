@@ -43,6 +43,8 @@ from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.inspection import inspect
 
+# FIXME: Add Sentry
+
 # Configuration from environment variables
 SIERRA_API_ENDPOINT = os.getenv("SIERRA_API_ENDPOINT")
 SIERRA_API_CLIENT_POOL_SIZE = int(os.getenv("SIERRA_API_CLIENT_POOL_SIZE"))
@@ -159,9 +161,10 @@ async def lifespan(app: FastAPI):
     scheduler.start()
 
     yield
-    await engine.dispose()
+
     scheduler.remove_job("send_to_sierra")
     scheduler.shutdown(wait=False)
+    await engine.dispose()
 
 
 async def send_to_sierra():
@@ -525,6 +528,8 @@ async def put_item_data(
     barcode: str = Path(
         ..., title="The barcode of the item to update", pattern=r"^[0-9]{14,16}\w{0,1}$"
     )
+    # FIXME: Change the endpoint to use item record id instead to avoid ambiguities
+    # Barcode should be unique in the upstream data, but...
 ):
     """
     Marks a SierraItem record for update by setting its `in_update_queue` flag to True.
@@ -782,13 +787,13 @@ async def post_data_sync_batch(
     except Exception as e:
         logger.error(e)
         raise HTTPException(status_code=500, detail="Internal server error")
+    # FIXME: Ideally, the response should return the count of upserted from db
     return JSONResponse(status_code=200, content={"upserted": len(sierra_items)})
 
 
 log_config = uvicorn.config.LOGGING_CONFIG
 log_config["formatters"]["default"]["fmt"] = log_formatter._fmt
 log_config["formatters"]["access"]["fmt"] = log_formatter._fmt
-
 
 config = uvicorn.Config(
     app=app,
@@ -801,7 +806,6 @@ config = uvicorn.Config(
     timeout_graceful_shutdown=120,
 )
 server = uvicorn.Server(config=config)
-
 
 if __name__ == "__main__":
     server.run()

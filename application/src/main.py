@@ -25,6 +25,8 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from PySide6.QtGui import QGuiApplication, QIcon, QPixmap
 from PySide6.QtQml import QQmlApplicationEngine
 
+# FIXME: Add Sentry
+
 # Set app user model ID in so that application icon is visible in Windows taskbar
 myappid = "helsinki.signumsavotta.application.1"
 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
