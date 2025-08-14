@@ -1,31 +1,68 @@
-# Signum-savotta backend application
+# Backend
 
-## Setup Instructions
+The backend component provides REST API endpoints and manages the database for the Tarroitusratkaisu solution. It handles client registration, item data management, synchronization with Sierra LMS, and system state monitoring.
 
-1. **Create a virtual environment**:
-   ```
-   python -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-   ```
+## Features
 
-2. **Install dependencies**:
-   ```
-   pip install -r requirements.txt
-   ```
+- **REST API:** FastAPI-based endpoints for item management, client registration, and system status.
+- **Database Integration:** Uses SQLAlchemy for PostgreSQL database operations.
+- **Periodic Synchronization:** Coordinates with the ETL component to keep item data up-to-date.
+- **Client Management:** Supports API key registration and access control.
+- **Error Reporting:** Integrated with Sentry for error tracking and diagnostics.
+- **Configurable:** All connection and sync parameters are set via environment variables.
 
-## Running the Application
+## Requirements
 
-To run the FastAPI application, execute the following command:
+- Python 3.10+
+- [FastAPI](https://fastapi.tiangolo.com/)
+- [SQLAlchemy](https://www.sqlalchemy.org/)
+- [APScheduler](https://apscheduler.readthedocs.io/)
+- [httpx](https://www.python-httpx.org/)
+- [sentry-sdk](https://pypi.org/project/sentry-sdk/)
+- [Uvicorn](https://www.uvicorn.org/)
 
-```
-uvicorn app.main:app --reload
-```
+## Usage
 
-This will start the server at `http://127.0.0.1:8000`.
+Intended to be run using docker-compose locally (see root README.MD for reference) or deployed to a server.
 
-## API Documentation
+## API Endpoints
 
-The automatically generated API documentation can be accessed at:
+- `/items/` – Manage item records
+- `/clients/` – Register and manage API clients
+- `/status/` – System and sync status
+- `/sync/` – Trigger or monitor synchronization jobs
+- `/docs/` - Swagger
+- `/redoc/` - Redoc
 
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- Redoc: `http://127.0.0.1:8000/redoc`
+## Environment Variables
+
+- `ENV`
+- `DB_HOST`
+- `DB_PORT`
+- `DB_USER`
+- `DB_PASSWORD`
+- `DB_NAME`
+- `FULL_SYNC_BATCH_SIZE`
+- `SIERRA_API_ENDPOINT`
+- `SIERRA_API_CLIENT_KEY`
+- `SIERRA_API_CLIENT_SECRET`
+- `SIERRA_API_CLIENT_POOL_SIZE`
+- `SIERRA_API_CLIENT_TIMEOUT_SECONDS`
+- `SIERRA_API_CLIENT_RETRIES`
+- `SIERRA_UPDATE_INTERVAL_SECONDS`
+- `SIERRA_UPDATE_MISFIRE_GRACE_TIME_SECONDS`
+- `SIERRA_UPDATE_BATCH_SIZE_LIMIT`
+- `SIERRA_UPDATE_SET_INVDA`
+- `SIERRA_UPDATE_SET_IUSE3`
+- `LOG_LEVEL`
+- `SENTRY_DSN`
+- `SENTRY_RELEASE`
+
+## License
+
+MIT License
+
+## Authors
+
+- Mikko Vihonen
+

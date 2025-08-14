@@ -13,12 +13,11 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
+import sentry_sdk
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import BigInteger, bindparam, func, select, text
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
-# FIXME: Add Sentry
 
 # Configuration from environment variables
 BACKEND_URL = os.getenv("BACKEND_URL")
@@ -32,6 +31,20 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = int(os.getenv("DB_PORT"))
 DB_NAME = os.getenv("DB_NAME")
+SENTRY_DSN = os.getenv("SENTRY_DSN")
+SENTRY_RELEASE = os.getenv("SENTRY_RELEASE")
+ENV = os.getenv("ENV")
+
+sentry_sdk.init(
+    dsn=SENTRY_DSN,
+    environment=ENV,
+    max_breadcrumbs=50,
+    debug=True if LOG_LEVEL == "DEBUG" else False,
+    traces_sample_rate=1.0,
+    send_default_pii=True,
+    release=SENTRY_RELEASE,
+)
+
 
 logger = logging.getLogger("etl.stdout")
 logger.setLevel(logging.getLevelName(LOG_LEVEL))

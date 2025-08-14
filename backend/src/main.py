@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
+import sentry_sdk
 import uvicorn
 from apscheduler.executors.asyncio import AsyncIOExecutor
 from apscheduler.jobstores.memory import MemoryJobStore
@@ -43,8 +44,6 @@ from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.inspection import inspect
 
-# FIXME: Add Sentry
-
 # Configuration from environment variables
 SIERRA_API_ENDPOINT = os.getenv("SIERRA_API_ENDPOINT")
 SIERRA_API_CLIENT_POOL_SIZE = int(os.getenv("SIERRA_API_CLIENT_POOL_SIZE"))
@@ -66,6 +65,19 @@ DB_HOST = os.getenv("DB_HOST")
 DB_PORT = int(os.getenv("DB_PORT"))
 DB_NAME = os.getenv("DB_NAME")
 LOG_LEVEL = os.getenv("LOG_LEVEL", default="DEBUG")
+SENTRY_DSN = os.getenv("SENTRY_DSN")
+SENTRY_RELEASE = os.getenv("SENTRY_RELEASE")
+ENV = os.getenv("ENV")
+
+sentry_sdk.init(
+    dsn=SENTRY_DSN,
+    environment=ENV,
+    max_breadcrumbs=50,
+    debug=True if LOG_LEVEL == "DEBUG" else False,
+    traces_sample_rate=1.0,
+    send_default_pii=True,
+    release=SENTRY_RELEASE,
+)
 
 sierra_http_transport = httpx.HTTPTransport(retries=SIERRA_API_CLIENT_RETRIES)
 sierra_http_client = httpx.Client(

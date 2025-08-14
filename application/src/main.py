@@ -15,6 +15,7 @@ from enum import Enum
 import assets_rc  # noqa: F401
 import httpx
 import psutil
+import sentry_sdk
 import serial
 from brother_ql.backends.helpers import discover, send
 from brother_ql.conversion import convert
@@ -24,8 +25,6 @@ from PIL import Image, ImageDraw, ImageFont
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from PySide6.QtGui import QGuiApplication, QIcon, QPixmap
 from PySide6.QtQml import QQmlApplicationEngine
-
-# FIXME: Add Sentry
 
 # Set app user model ID in so that application icon is visible in Windows taskbar
 myappid = "helsinki.signumsavotta.application.1"
@@ -396,6 +395,18 @@ class Backend(QObject):
                 self.backend_url = config["backend"]["url"]
                 self.registration_name = config["registration"]["name"]
                 self.registration_key = config["registration"]["key"]
+                try:
+                    sentry_sdk.init(
+                        dsn=config["sentry"]["dsn"],
+                        environment=config["sentry"]["environment"],
+                        max_breadcrumbs=50,
+                        debug=False,
+                        traces_sample_rate=1.0,
+                        send_default_pii=True,
+                        release=config["sentry"]["release"],
+                    )
+                except Exception as e:
+                    print(e)
             # FIXME: validation rules for configuration
             self.configuration_state = ConfigurationState.VALID_CONFIGURATION
         except Exception:
