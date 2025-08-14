@@ -23,7 +23,7 @@ The backend component provides REST API endpoints and manages the database for t
 
 ## Usage
 
-Intended to be run using docker-compose locally (see root README.MD for reference) or deployed to a server.
+Intended to be run using docker-compose locally (see repository root `README.MD` for reference) or installed to a server.
 
 ## API Endpoints
 
@@ -64,5 +64,5 @@ MIT License
 
 ## Authors
 
-- Mikko Vihonen
+- Mikko Vihonen (mikko.vihonen@iki.fi)
 

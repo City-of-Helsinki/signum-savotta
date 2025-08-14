@@ -12,15 +12,6 @@ The solution is designed to integrate with Brother QL label printers and 3M RFID
 - **Status Monitoring:** Real-time feedback for reader, printer, battery, and overall system status.
 - **Resource Management:** Uses Qt resource system (`.qrc`) for icons, fonts, and images.
 
-## Requirements
-
-- Python 3.10+
-- Windows 10/11
-- [PySide6](https://pypi.org/project/PySide6/)
-- [brother_ql](https://pypi.org/project/brother_ql/)
-- [Pillow](https://pypi.org/project/Pillow/)
-- [pyserial](https://pypi.org/project/pyserial/)
-
 ## Installation
 
 1. Clone the repository:
@@ -57,20 +48,10 @@ python src/main.py
 ## Project Structure
 
 ```
-application/
-├── main.qml           # Main QML UI
-├── assets.qrc         # Qt resource file
-├── src/
-│   ├── main.py        # Python entry point
-│   ├── assets_rc.py   # Compiled Qt resources
-│   └── ...            # Other modules
+application/           # The Desktop application
+backend/               # The Backend supporting the desktop application
+etl_component/         # ETL component responsible for synchronizing Sierra LMS item and bibliographic data to backend database
 ```
-
-## Notes
-
-- Make sure your Brother QL printer and 3M series 210 RFID reader are connected before starting the application.
-- For custom label sizes or printer models, update the configuration in the UI or source code.
-- If you add new resources (images, fonts), update `assets.qrc` and recompile with `pyside6-rcc`.
 
 ## License
 
@@ -78,4 +59,4 @@ MIT License
 
 ## Authors
 
-- Mikko Vihonen
+- Mikko Vihonen (mikko.vihonen@nitor.com)

@@ -22,7 +22,7 @@ The ETL component is responsible for periodically synchronizing Sierra LMS item 
 
 ## Usage
 
-Intended to be run using docker-compose locally or installed to a server.
+Intended to be run using docker-compose locally (see repository root `README.MD` for reference) or installed to a server.
 
 ## Periodic Data Synchronization Flow
 
@@ -38,7 +38,7 @@ flowchart TD
     `"]
     C --> D[Get the current Sierra database time with its configured timezone]
     D --> E@{ shape: diamond, label: "Sync configuration is SYNC_FULL or SYNC_CHANGES?" }
-    E -- SYNC_FULL --> F[Load Sierra items that have larger record_id than that passed in sync job parameters]
+    E -- SYNC_FULL --> F[Load Sierra items that have larger item_record_id than that passed in sync job parameters]
     E -- SYNC_CHANGES --> G[Load Sierra items that have have changed since the timestamp  passed in sync job parameters]
     F --> H[Convert the database query into Pandas dataframe and convert it to TSV]
     G --> H
@@ -69,4 +69,4 @@ MIT License
 
 ## Authors
 
-- Mikko Vihonen
+- Mikko Vihonen (mikko.vihonen@nitor.com)

@@ -1,0 +1,11 @@
+[sentry]
+dsn = 
+environment = 
+release = 
+
+[backend]
+url = 
+
+[registration]
+name = 
+key = 
