@@ -15,7 +15,7 @@ This is the desktop application for Signum-savotta, providing a modern UI for RF
 - Python 3.10+
 - Windows 10/11
 - [PySide6](https://pypi.org/project/PySide6/)
-- [brother_ql](https://pypi.org/project/brother_ql/)
+- [brother_ql](https://pypi.org/project/brother_ql2/)
 - [Pillow](https://pypi.org/project/Pillow/)
 - [pyserial](https://pypi.org/project/pyserial/)
 

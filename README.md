@@ -26,7 +26,7 @@ The solution is designed to integrate with Brother QL label printers and 3M RFID
    docker compose up
    ```
 
-3. Activate desktop application environment:
+3. Activate desktop application virtual environment:
    ```sh
    cd application
    ../activate_project.sh
