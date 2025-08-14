@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
+import regex
 import sentry_sdk
 import uvicorn
 from apscheduler.executors.asyncio import AsyncIOExecutor
@@ -109,7 +110,6 @@ engine = create_async_engine(
     connect_args={"server_settings": {"application_name": "signum-savotta-backend"}},
     echo=False,
 )
-
 
 scheduler = AsyncIOScheduler(
     jobstores={"default": MemoryJobStore()},
@@ -221,7 +221,7 @@ async def send_to_sierra():
             if SIERRA_UPDATE_BATCH_SIZE_LIMIT > 0:
                 stmt = stmt.limit(SIERRA_UPDATE_BATCH_SIZE_LIMIT)
             result = await session.execute(stmt)
-            items = result.scalars().all()
+            items: list[SierraItem] = result.scalars().all()
             base64_encoded_key_and_secret = base64.b64encode(
                 f"{SIERRA_API_CLIENT_KEY}:{SIERRA_API_CLIENT_SECRET}".encode("utf-8")
             ).decode("utf-8")
@@ -240,15 +240,45 @@ async def send_to_sierra():
                 try:
                     try:
                         response = sierra_http_client.get(
-                            url=f"{SIERRA_API_ENDPOINT}/items/{item.item_number}?fields=fixedFields",
+                            url=f"{SIERRA_API_ENDPOINT}/items/{item.item_number}?fields=fixedFields,varFields",
                             headers={"Authorization": f"Bearer {access_token}"},
                         )
                         response.raise_for_status()
                     except httpx.HTTPStatusError as e:
                         raise RuntimeError(f"Sierra item get failed {e}")
                     fetched_fixed_fields = response.json()["fixedFields"]
+                    fetched_varfields = response.json()["varFields"]
                     fixed_fields = {}
                     json = {}
+                    updated_existing = False
+                    if fetched_varfields is not None:
+                        for f_index, f_value in enumerate(fetched_varfields):
+                            if f_value["fieldTag"] == "c" and f_value["marcTag"] == "099":
+                                for sf_index, sf_value in enumerate(f_value["subfields"]):
+                                    if sf_value["tag"] == "a":
+                                        old_classification = sf_value["content"]
+                                        genres = regex.match(
+                                            r"(?:[0-9.,\s]+)(\p{L}+)", old_classification
+                                        )
+                                        try:
+                                            genre = genres.groups(0)
+                                        except Exception:
+                                            genre = None
+                                        fetched_varfields[f_index]["subfields"][sf_index][
+                                            "content"
+                                        ] = f"{item.classification}{"" if genre is None else f" {"".join(genre)}"}"
+                                        updated_existing = True
+                    if not updated_existing:
+                        fetched_varfields.append(
+                            {
+                                "fieldTag": "c",
+                                "marcTag": "099",
+                                "ind1": " ",
+                                "ind2": " ",
+                                "subfields": [{"tag": "a", "content": item.classification}],
+                            }
+                        )
+                    json["varFields"] = fetched_varfields
                     if SIERRA_UPDATE_SET_IUSE3:
                         label = (
                             fetched_fixed_fields["93"]["label"]
@@ -532,28 +562,20 @@ async def get_item_data(
 
 
 @app.put(
-    "/itemdata/{barcode}",
+    "/itemdata/{item_record_id}",
     tags=["item"],
     dependencies=[Depends(allow_printer_client_only)],
 )
-async def put_item_data(
-    barcode: str = Path(
-        ..., title="The barcode of the item to update", pattern=r"^[0-9]{14,16}\w{0,1}$"
-    )
-    # FIXME: Change the endpoint to use item record id instead to avoid ambiguities
-    # Barcode should be unique in the upstream data, but...
-):
+async def put_item_data(item_record_id: int = Path(..., title="The id of the item to update")):
     """
     Marks a SierraItem record for update by setting its `in_update_queue` flag to True.
 
     This endpoint is intended to be called by authorized printer clients to signal that
-    an item identified by its barcode should be updated in Sierra via a background process.
+    an item identified by its item_record_id should be updated in Sierra via a background process.
 
     Parameters:
     -----------
-    barcode : str
-        The barcode of the item to be marked for update. Must match the pattern:
-        14–16 digits optionally followed by one alphanumeric character.
+    item_record_id : int
 
     Behavior:
     ---------
@@ -577,7 +599,7 @@ async def put_item_data(
         async with session.begin():
             result = await session.execute(
                 update(SierraItem)
-                .where(SierraItem.barcode == barcode)
+                .where(SierraItem.item_record_id == item_record_id)
                 .values({"in_update_queue": True})
                 .returning(SierraItem)
             )

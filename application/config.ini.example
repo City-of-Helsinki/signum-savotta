@@ -5,6 +5,7 @@ release =
 
 [backend]
 url = 
+update_sierra_items =
 
 [registration]
 name = 

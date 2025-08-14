@@ -8,7 +8,6 @@ import ctypes
 import socket
 import sys
 import time
-import traceback
 from configparser import RawConfigParser
 from enum import Enum
 
@@ -182,7 +181,8 @@ def parseReadVersionResponse(data):
             "minor_value": data[8],
             "build_version": data[9],
         }
-    except Exception:
+    except Exception as e:
+        sentry_sdk.capture_exception(error=e)
         return None
 
 
@@ -208,7 +208,8 @@ def parseReadBlockUIDResponse(data):
             "num_tags": num_tags,
             "tags": tags,
         }
-    except Exception:
+    except Exception as e:
+        sentry_sdk.capture_exception(error=e)
         return None
 
 
@@ -247,7 +248,8 @@ def parseReadMultiblockResponse(data):
         ):
             resp["checksum_match"] = True
         return resp
-    except Exception:
+    except Exception as e:
+        sentry_sdk.capture_exception(error=e)
         return None
 
 
@@ -380,6 +382,7 @@ class Backend(QObject):
         # Backend state variables
         self.backend_state: BackendState = BackendState.BACKEND_NOT_AVAILABLE
         self.backend_url = None
+        self.update_sierra_items = False
 
         # Registration state variables
         self.registration_name = None
@@ -393,6 +396,7 @@ class Backend(QObject):
             with open("config.ini", "r", encoding="utf-8") as configfile:
                 config.read_file(configfile)
                 self.backend_url = config["backend"]["url"]
+                self.update_sierra_items = config["backend"]["update_sierra_items"]
                 self.registration_name = config["registration"]["name"]
                 self.registration_key = config["registration"]["key"]
                 try:
@@ -406,8 +410,9 @@ class Backend(QObject):
                         release=config["sentry"]["release"],
                     )
                 except Exception as e:
+                    # FIXME: validation rules for configuration
+                    # FIXME: Handle faulty config
                     print(e)
-            # FIXME: validation rules for configuration
             self.configuration_state = ConfigurationState.VALID_CONFIGURATION
         except Exception:
             self.configuration_state = ConfigurationState.INVALID_CONFIGURATION
@@ -468,8 +473,8 @@ class Backend(QObject):
             }
             with open("config.ini", "w", encoding="utf-8") as configfile:
                 config.write(configfile)
-        except Exception:
-            # FIXME: send error to sentry here
+        except Exception as e:
+            sentry_sdk.capture_exception(error=e)
             return
         self.backend_url = backend_url
         self.registration_name = registration_name
@@ -486,7 +491,8 @@ class Backend(QObject):
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.connect(("8.8.8.8", 80))
                 return s.getsockname()[0]
-        except Exception:
+        except Exception as e:
+            sentry_sdk.capture_exception(error=e)
             return None
 
     def refresh_status_with_backend(self):
@@ -506,22 +512,16 @@ class Backend(QObject):
                     },
                 )
                 response.raise_for_status()
-                # FIXME: Handle response and update UI
-                # {
-                # 'full_sync_completed_at': '',
-                # 'initialized_at': '2025-07-29T13:34:32.973867+00:00',
-                # 'last_sync_run_completed_at': '2025-07-30T15:32:41.284914+00:00',
-                # 'sync_changes_since': '2025-07-29T14:20:19.261682+00:00',
-                # 'sync_mode': 'SYNC_FULL'
-                # }
                 self.backend_state = BackendState.BACKEND_OK
                 self.registration_state = RegistrationState.REGISTRATION_SUCCEEDED
-            except httpx.RequestError:
+            except httpx.RequestError as e:
                 # Backend had a protocol level error
+                sentry_sdk.capture_exception(error=e)
                 self.backend_state = BackendState.BACKEND_NOT_AVAILABLE
                 self.registration_state = RegistrationState.REGISTRATION_FAILED
-            except httpx.HTTPStatusError:
+            except httpx.HTTPStatusError as e:
                 # Backend did respond, but the response status was either 4xx or 5xx
+                sentry_sdk.capture_exception(error=e)
                 self.backend_state = BackendState.BACKEND_OK
                 self.registration_state = RegistrationState.REGISTRATION_FAILED
 
@@ -751,7 +751,7 @@ class Backend(QObject):
                                     self.active_item = None
                                     self.item_data_message = "<p>" f"<b>Virhe: {e}</b>" "</p>"
                                 except Exception as e:
-                                    print(e)
+                                    sentry_sdk.capture_exception(error=e)
                                     # Error catchall
                                     self.reader_state = ReaderState.READER_CONNECTED
                                     self.backend_state = BackendState.BACKEND_ERROR_RESPONSE
@@ -821,6 +821,18 @@ class Backend(QObject):
                             backend_identifier=self.printer.get("backend", "pyusb"),
                             blocking=False,
                         )
+                        try:
+                            if self.update_sierra_items:
+                                httpResponse = httpx.put(
+                                    f"{self.backend_url}/itemdata/{self.active_item.get('item_record_id')}",
+                                    headers={
+                                        "x-api-key": self.registration_key,
+                                    },
+                                )
+                                httpResponse.raise_for_status()
+                        except Exception as e:
+                            sentry_sdk.capture_exception(error=e)
+                            pass
                     else:
                         # If the tag is the same as the last printed one, do not print it again
                         pass
@@ -844,9 +856,7 @@ class Backend(QObject):
             pass
 
         except Exception as e:
-            # FIXME: These exceptions are always sent to Sentry
-            print(f"Error: {e}")
-            print(traceback.format_exc())
+            sentry_sdk.capture_exception(error=e)
             pass
 
         # Determine overall state based on battery, backend, registration, reader, and printer states
