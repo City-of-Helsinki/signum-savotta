@@ -1,6 +1,6 @@
 # Backend
 
-The backend component provides REST API endpoints and manages the database for the Tarroitusratkaisu solution. It handles client registration, item data management, synchronization with Sierra LMS, and system state monitoring.
+The backend component provides REST API endpoints and manages the database for the Signum-savotta solution. It handles client registration, item data management, synchronization with Sierra LMS, and system state monitoring.
 
 ## Features
 
