@@ -4,13 +4,7 @@ Signum-savotta is a desktop application for shelf mark printing with a REST API 
 
 The solution is designed to integrate with Brother QL label printers and 3M RFID readers with zero configuration to provide a seamless workflow for shelf mark printing without manual data entry. In addition, there is a lightweight API key management to ensure that only registered clients are able to make requests that would alter data in the solution's own and the database of Sierra LMS.
 
-## Features
-
-- **RFID Tag Reading:** Supports 3M RFID readers for tag detection.
-- **Label Printing:** Integrates with Brother QL printers for high-quality label printing.
-- **Modern UI:** Built with QML and PySide6
-- **Status Monitoring:** Real-time feedback for reader, printer, battery, and overall system status.
-- **Resource Management:** Uses Qt resource system (`.qrc`) for icons, fonts, and images.
+> **Note**: This application evolved from a POC literally done overnight. Although manually tested it's missing test automation and CI/CD. City of Helsinki cannot provide support and the solution is published here for reference to whoever might find it interesting.
 
 ## Installation
 
