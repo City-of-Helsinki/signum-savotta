@@ -11,18 +11,18 @@ The ETL component is responsible for periodically synchronizing Sierra LMS item 
 
 ## Requirements
 
-- Python 3.10+
-- [FastAPI](https://fastapi.tiangolo.com/)
-- [SQLAlchemy](https://www.sqlalchemy.org/)
+- Python 3.14+
 - [APScheduler](https://apscheduler.readthedocs.io/)
-- [Pandas](https://pandas.pydata.org/)
+- [FastAPI](https://fastapi.tiangolo.com/)
 - [httpx](https://www.python-httpx.org/)
+- [Pandas](https://pandas.pydata.org/)
 - [sentry-sdk](https://pypi.org/project/sentry-sdk/)
+- [SQLAlchemy](https://www.sqlalchemy.org/)
 - [Uvicorn](https://www.uvicorn.org/)
 
 ## Usage
 
-Intended to be run using docker-compose locally (see repository root `README.MD` for reference) or installed to a server.
+Intended to be run using docker-compose locally (see repository root `/README.MD` for reference) or installed to a server.
 
 ## Periodic Data Synchronization Flow
 

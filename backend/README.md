@@ -13,21 +13,21 @@ The backend component provides REST API endpoints and manages the database for t
 
 ## Requirements
 
-- Python 3.10+
-- [FastAPI](https://fastapi.tiangolo.com/)
-- [SQLAlchemy](https://www.sqlalchemy.org/)
+- Python 3.14+
 - [APScheduler](https://apscheduler.readthedocs.io/)
+- [FastAPI](https://fastapi.tiangolo.com/)
 - [httpx](https://www.python-httpx.org/)
 - [sentry-sdk](https://pypi.org/project/sentry-sdk/)
+- [SQLAlchemy](https://www.sqlalchemy.org/)
 - [Uvicorn](https://www.uvicorn.org/)
 
 ## Usage
 
-Intended to be run using docker-compose locally (see repository root `README.MD` for reference) or installed to a server.
+Intended to be run using docker-compose locally (see repository root `/README.MD` for reference) or installed to a server.
 
 ## API Endpoints
 
-- `/itemdata/` – Manage item records: **GET**, **POST**
+- `/itemdata/` – Manage item records: **GET** with barcode to fetch item details, **PUT** with item_record_id to add to update queue
 - `/status/` – Clients post periodically their status and receive backend status in response: **POST**
 - `/sync/` – **GET** ETL job synchronization configuration and **POST** ETL job payload
 - `/` - Swagger documentation
@@ -85,5 +85,5 @@ MIT License
 
 ## Authors
 
-- Mikko Vihonen (mikko.vihonen@iki.fi)
+- Mikko Vihonen (mikko.vihonen@nitor.com)
 

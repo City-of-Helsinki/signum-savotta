@@ -10,13 +10,15 @@ This is the desktop application for Signum-savotta, providing a modern UI for RF
 - **Status Monitoring:** Real-time feedback for reader, printer, battery, and overall system status.
 - **Resource Management:** Uses Qt resource system (`.qrc`) for icons, fonts, and images.
 
+> **Note**: The real time updates to the QML UI can cause flickering in the UI should there be rapid chages in the network connectivity, reader results etc.
+
 ## Requirements
 
-- Python 3.10+
+- Python 3.14+
 - Windows 10/11
-- [PySide6](https://pypi.org/project/PySide6/)
-- [brother_ql](https://pypi.org/project/brother_ql2/)
+- [brother_ql2](https://pypi.org/project/brother_ql2/)
 - [Pillow](https://pypi.org/project/Pillow/)
+- [PySide6](https://pypi.org/project/PySide6/)
 - [pyserial](https://pypi.org/project/pyserial/)
 
 ## Installation
@@ -31,6 +33,10 @@ This is the desktop application for Signum-savotta, providing a modern UI for RF
    ```sh
    pyside6-rcc assets.qrc -o src/assets_rc.py
    ```
+
+## Configuration
+
+The application configuration is stored in `config.ini` file located in the working directory.
 
 ## Usage
 
