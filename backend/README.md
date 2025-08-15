@@ -27,36 +27,57 @@ Intended to be run using docker-compose locally (see repository root `README.MD`
 
 ## API Endpoints
 
-- `/items/` – Manage item records
-- `/clients/` – Register and manage API clients
-- `/status/` – System and sync status
-- `/sync/` – Trigger or monitor synchronization jobs
-- `/docs/` - Swagger
-- `/redoc/` - Redoc
+- `/itemdata/` – Manage item records: **GET**, **POST**
+- `/status/` – Clients post periodically their status and receive backend status in response: **POST**
+- `/sync/` – **GET** ETL job synchronization configuration and **POST** ETL job payload
+- `/` - Swagger documentation
+- `/redoc/` - Redoc documentation
+
+## Application lifecycle
+
+```mermaid
+flowchart TD
+    A["`
+    Application start
+    `"] --> B["`
+    Create database connection
+    `"]
+    B --> C@{ shape: diamond, label: "Database schema exists?" }
+    C -- NO --> D[Create tables using SQLAlchemy ORM mappings]
+    D --> E
+    C -- YES --> E[Start APScheduler Sierra item update sync task]
+    E --> F[Start FastAPI event loop]
+    E --> G["`
+    Wait job start until interval configured with **SYNC_JOB_INTERVAL_SECONDS**
+    `"]
+    G --> H["`
+    Fetch from DB **SIERRA_UPDATE_BATCH_SIZE_LIMIT** amount SierraItems for which *in_update_queue* is True and send them to Sierra REST API **PUT** /item/ endpoint`"]
+    H --> G
+```
 
 ## Environment Variables
 
-- `ENV`
-- `DB_HOST`
-- `DB_PORT`
-- `DB_USER`
-- `DB_PASSWORD`
-- `DB_NAME`
-- `FULL_SYNC_BATCH_SIZE`
-- `SIERRA_API_ENDPOINT`
-- `SIERRA_API_CLIENT_KEY`
-- `SIERRA_API_CLIENT_SECRET`
-- `SIERRA_API_CLIENT_POOL_SIZE`
-- `SIERRA_API_CLIENT_TIMEOUT_SECONDS`
-- `SIERRA_API_CLIENT_RETRIES`
-- `SIERRA_UPDATE_INTERVAL_SECONDS`
-- `SIERRA_UPDATE_MISFIRE_GRACE_TIME_SECONDS`
-- `SIERRA_UPDATE_BATCH_SIZE_LIMIT`
-- `SIERRA_UPDATE_SET_INVDA`
-- `SIERRA_UPDATE_SET_IUSE3`
-- `LOG_LEVEL`
-- `SENTRY_DSN`
-- `SENTRY_RELEASE`
+- `ENV` application runtime environment (local, PROD)
+- `DB_HOST` Signum-savotta internal database host (URL without port)
+- `DB_PORT` Signum-savotta internal database port
+- `DB_USER` Signum-savotta internal database user
+- `DB_PASSWORD` Signum-savotta internal database password
+- `DB_NAME` Signum-savotta internal database name
+- `FULL_SYNC_BATCH_SIZE` Sierra ETL Synchronization batch size
+- `SIERRA_API_ENDPOINT` Sierra LMS REST API endpoint base URL
+- `SIERRA_API_CLIENT_KEY` Sierra LMS REST API client key
+- `SIERRA_API_CLIENT_SECRET` Sierra LMS REST API client secret
+- `SIERRA_API_CLIENT_POOL_SIZE` HTTP Client pool size for Sierra LMS REST API connectivity
+- `SIERRA_API_CLIENT_TIMEOUT_SECONDS` HTTP Client request timeout for Sierra LMS REST API connectivity
+- `SIERRA_API_CLIENT_RETRIES` HTTP Client request retry count for Sierra LMS REST API connectivity
+- `SIERRA_UPDATE_INTERVAL_SECONDS` Sierra LMS update interval
+- `SIERRA_UPDATE_MISFIRE_GRACE_TIME_SECONDS` Sierra LMS update scheduling lateness leeway
+- `SIERRA_UPDATE_BATCH_SIZE_LIMIT` Maximum number of Sierra LMS updates per update iteration
+- `SIERRA_UPDATE_SET_INVDA` Boolean to control if INVDA field is updated in Sierra LMS for reclassified items
+- `SIERRA_UPDATE_SET_IUSE3` Boolean to control if IUSE3 field is updated in Sierra LMS for reclassified items
+- `LOG_LEVEL` log level according to Python logging (also controls Sentry log levels)
+- `SENTRY_DSN` Sentry DSN
+- `SENTRY_RELEASE` Sentry release identifier 
 
 ## License
 

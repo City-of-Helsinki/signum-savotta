@@ -496,6 +496,9 @@ class Backend(QObject):
             return None
 
     def refresh_status_with_backend(self):
+        """
+        Send status to backend and get backend status in response
+        """
         if self.configuration_state == ConfigurationState.VALID_CONFIGURATION:
             self.internal_hostname = socket.gethostname()
             self.internal_ip_address = self.__class__.get_internal_ip()

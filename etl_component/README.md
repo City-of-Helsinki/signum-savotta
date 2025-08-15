@@ -48,20 +48,20 @@ flowchart TD
 ```
 
 ## Environment Variables
-- `ENV`
-- `DB_HOST`
-- `DB_NAME`
-- `DB_USER`
-- `DB_PASSWORD`
-- `DB_PORT`
-- `BACKEND_URL`
-- `ETL_CLIENT_API_KEY`
-- `MAX_SYNC_DELTA_MINUTES`
-- `SYNC_JOB_INTERVAL_SECONDS`
-- `SYNC_JOB_MISFIRE_GRACE_TIME_SECONDS`
-- `LOG_LEVEL`
-- `SENTRY_DSN`
-- `SENTRY_RELEASE`
+- `ENV` application runtime environment (local, PROD)
+- `DB_HOST` Sierra LMS database host (URL without port)
+- `DB_PORT` Sierra LMS database port
+- `DB_USER` Sierra LMS database user
+- `DB_PASSWORD` Sierra LMS database password
+- `DB_NAME` Sierra LMS database name
+- `BACKEND_URL` Signum-savotta backend base URL
+- `ETL_CLIENT_API_KEY` API key for ETL client for Signum-savotta backend access
+- `MAX_SYNC_DELTA_MINUTES` Time limit for Sierra bib/item data changes (delta) updates
+- `SYNC_JOB_INTERVAL_SECONDS` Sierra LMS bib/item data sync interval 
+- `SYNC_JOB_MISFIRE_GRACE_TIME_SECONDS`  Sierra LMS bib/item data sync scheduling lateness leeway
+- `LOG_LEVEL` log level according to Python logging (also controls Sentry log levels)
+- `SENTRY_DSN` Sentry DSN
+- `SENTRY_RELEASE` Sentry release identifier 
 
 ## License
 
