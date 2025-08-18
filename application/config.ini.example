@@ -9,4 +9,9 @@ update_sierra_items =
 
 [registration]
 name = 
-key = 
+key =
+
+[ui]
+update_interval_ms = 200
+state_stability_threshold = 3
+backend_refresh_interval = 10

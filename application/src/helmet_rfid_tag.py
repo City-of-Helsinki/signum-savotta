@@ -326,9 +326,11 @@ def decode_iso_iec_4bit_5bit(binary_string, starting_dict):
             active_dict = latch_dict
 
         shift = False
+        matched = False
 
         for key in active_dict:
             if bs_to_process[0 : len(key)] == key:
+                matched = True
                 if active_dict[key] not in iso_iec_latch_shift_values:
                     result.append(active_dict[key])
                 elif "Latch" in active_dict[key]:
@@ -347,6 +349,11 @@ def decode_iso_iec_4bit_5bit(binary_string, starting_dict):
                         shift_dict = iso_iec_4bit_numeric_encoding
                     shift = True
                 bs_to_process = bs_to_process[len(key) :]
+                break
+
+        # Break if no match found to prevent infinite loop
+        if not matched:
+            break
 
     return "".join(result)
 
