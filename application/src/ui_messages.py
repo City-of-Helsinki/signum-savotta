@@ -27,6 +27,9 @@ def join_with_and(items, last_separator="ja"):
 
 
 def get_error_status_text(positives: list[str], negatives: list[str]):
+    """
+    Natural language error status text with positives first followed by negatives
+    """
     return (
         f"{join_with_and(positives, 'ja')}"
         f"{", mutta " if len(positives) > 0 and len(negatives) > 0 else ""}"
