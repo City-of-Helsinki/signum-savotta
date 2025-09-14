@@ -521,7 +521,7 @@ async def post_status(
 )
 async def get_item_data(
     barcode: str = Path(
-        ..., title="The barcode of the item to retrieve", pattern=r"^[0-9]{14,16}\w{0,1}$"
+        ..., title="The barcode of the item to retrieve", pattern=r"^[0-9\.\w]{10,30}$"
     )
 ):
     """
