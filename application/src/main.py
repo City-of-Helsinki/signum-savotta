@@ -198,15 +198,15 @@ class Backend(QObject):
         self.config_manager = ConfigurationManager()
 
         self.state_manager = StateTransitionManager(
-            stability_threshold=self.config_manager.get_state_stability_threshold()
+            stability_threshold=self.config_manager.get("ui", "state_stability_threshold", int)
         )
 
         if self.config_manager.is_valid():
             self.backend_client.configure(
-                backend_url=self.config_manager.get_backend_url(),
-                registration_name=self.config_manager.get_registration_name(),
-                registration_key=self.config_manager.get_registration_key(),
-                update_sierra_items=self.config_manager.should_update_sierra_items(),
+                backend_url=self.config_manager.get("backend", "url"),
+                registration_name=self.config_manager.get("registration", "name"),
+                registration_key=self.config_manager.get("registration", "key"),
+                update_sierra_items=self.config_manager.get("backend", "update_sierra_items"),
             )
             self.backend_client.refresh_status_with_backend()
 
@@ -215,7 +215,12 @@ class Backend(QObject):
         self.active_item: str | None = None
         self.last_printed_tag: HelmetRfidTag | None = None
 
-        self.printer = Printer()
+        #        self.printer = Printer("QL-810W", 38)
+        self.printer = Printer(
+            self.config_manager.get("printer", "model"),
+            self.config_manager.get("printer", "label", str),
+        )
+
         self.printer_state: PrinterState = PrinterState.NO_PRINTER_CONNECTED
 
         self.iteration: int = 0
@@ -225,7 +230,7 @@ class Backend(QObject):
         super().__init__()
 
         self.timer = QTimer()
-        self.timer.setInterval(self.config_manager.get_ui_update_interval())
+        self.timer.setInterval(self.config_manager.get("ui", "update_interval_ms", int))
         self.timer.timeout.connect(self.reader_loop)
         self.timer.start()
 
@@ -257,14 +262,14 @@ class Backend(QObject):
         Application event loop
         """
 
-        self.configuration_state_sig.emit(self.config_manager.get_state().name)
+        self.configuration_state_sig.emit(self.config_manager.configuration_state.name)
 
         battery = psutil.sensors_battery()
         if battery:
             self.batterycharging_sig.emit(battery.power_plugged)
             self.batterypercentage_sig.emit(battery.percent)
 
-        if self.iteration < self.config_manager.get_backend_refresh_interval():
+        if self.iteration < self.config_manager.get("ui", "backend_refresh_interval", int):
             self.iteration = self.iteration + 1
         else:
             self.backend_client.refresh_status_with_backend()
@@ -317,7 +322,6 @@ class Backend(QObject):
                         self.backend_client.update_sierra_item(
                             self.active_item.get("item_record_id")
                         )
-
                 self.last_printed_tag = rfid_result.tag
             else:
                 if self.backend_client.backend_state == BackendState.BACKEND_EMPTY_RESPONSE:
