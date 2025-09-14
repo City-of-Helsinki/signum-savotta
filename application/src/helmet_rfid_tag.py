@@ -571,7 +571,9 @@ class HelmetRfidTag:
                     int(data, 2).to_bytes((len(data) + 7) // 8), byteorder="big", signed=False
                 )
             case (Encoding.APPLICATION_SPECIFIC, _):
-                return f"unhandled app specific encoding, oid: {oid}, data: {data}"
+                return f"unhandled app specific encoding, oid: {oid}, data: {int.from_bytes(
+                    int(data, 2).to_bytes((len(data) + 7) // 8), byteorder="big", signed=False
+                )}"
             case (Encoding.UNSIGNED_BIG_ENDIAN_INTEGER, _):
                 return int.from_bytes(
                     int(data, 2).to_bytes((len(data) + 7) // 8), byteorder="big", signed=False
@@ -583,11 +585,11 @@ class HelmetRfidTag:
             case (Encoding.ISO_IEC_6_BIT_CODE, _):
                 return decode_with_dict(data, iso_iec_6bit_dict, 5)
             case (Encoding.ISO_IEC_7_BIT_CODE_US_ASCII, _):
-                return decode_with_dict(data, iso_iec_7bit_us_ascii)
+                return decode_with_dict(data, iso_iec_7bit_us_ascii, 6)
             case (Encoding.OCTET_STRING_ISO_IEC_8859_1, _):
                 return decode_iso_iec_8859_1(data)
             case (Encoding.UTF_8_STRING_ISO_IEC_10646, _):
-                return f"UTF_8_STRING_ISO_IEC_10646, data: {data}"
+                return decode_utf8_binary(data)
             case (Encoding.UNKNOWN_COMPACTION, _):
                 return f"UNKNOWN_COMPACTION, data: {data}"
             case (_, _):  # Unknown compaction
@@ -621,6 +623,7 @@ class HelmetRfidTag:
                 data = binary_string[starting_position + 16 : starting_position + 16 + length * 8]
 
                 value = self.decode(encoding=encoding, data=data, oid=oid)
+
                 match oid:
                     case Oid.PRIMARY_ITEM_IDENTIFIER:
                         self.primary_item_identifier = value
@@ -683,6 +686,7 @@ class HelmetRfidTag:
             self.welformed_data = False
         if self.content_parameter is None:
             self.welformed_data = False
+        """
         if self.content_parameter is not None:
             for value in self.content_parameter:
                 oid = Oid(value)
@@ -766,3 +770,4 @@ class HelmetRfidTag:
                     case Oid.LOCAL_DATA_C:
                         if self.local_data_c is None:
                             self.welformed_data = False
+            """

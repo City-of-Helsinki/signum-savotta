@@ -108,9 +108,11 @@ class Printer:
     Printer class that handles all printer-specific operations and state management
     """
 
-    def __init__(self):
+    def __init__(self, model: str, label: str):
         self.state: PrinterState = PrinterState.NO_PRINTER_CONNECTED
         self.device: Optional[Dict[str, Any]] = None
+        self.model = model
+        self.label = label
 
     def discover_printer(self) -> PrintResult:
         """
@@ -166,13 +168,12 @@ class Printer:
                 width=413,
                 height=signum_height,
             )
-
-            qlr = BrotherQLRaster(self.device.get("model", "QL-810W"))
+            qlr = BrotherQLRaster(self.device.get("model", self.model))
             qlr.exception_on_warning = False
             instructions = convert(
                 qlr=qlr,
                 images=[image],
-                label="38",
+                label=self.label,
                 rotate="auto",
                 threshold=70.0,
                 dither=False,
@@ -195,5 +196,6 @@ class Printer:
             return True
 
         except Exception as e:
+            print(e)
             sentry_sdk.capture_exception(error=e)
             return False

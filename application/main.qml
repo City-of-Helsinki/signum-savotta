@@ -87,7 +87,7 @@ ApplicationWindow {
 
     Shortcut {
         enabled: true
-        sequence: "Ctrl+C,Ctrl+F"
+        sequence: "Ctrl+C,Ctrl+F,Ctrl+N"
         onActivated: mainWindow.configMode = true
     }
 
