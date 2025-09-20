@@ -182,10 +182,8 @@ class Printer:
                 dpi_600=False,
                 hq=False,
             )
-
             # Uncomment the line below to show the signum in a window for debugging purposes
             # image.show()
-
             send(
                 instructions=instructions,
                 printer_identifier=self.device["identifier"],

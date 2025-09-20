@@ -105,9 +105,6 @@ class StateTransitionManager:
         if candidate_state == OverallState.BATTERY_LOW:
             self.current_overall_state = candidate_state
             self.state_stability_counter = {candidate_state: self.STABILITY_THRESHOLD}
-        elif candidate_state == OverallState.READY_TO_USE:
-            self.current_overall_state = candidate_state
-            self.state_stability_counter = {candidate_state: self.STABILITY_THRESHOLD}
         else:
             if candidate_state not in self.state_stability_counter:
                 self.state_stability_counter = {candidate_state: 1}
@@ -215,7 +212,6 @@ class Backend(QObject):
         self.active_item: str | None = None
         self.last_printed_tag: HelmetRfidTag | None = None
 
-        #        self.printer = Printer("QL-810W", 38)
         self.printer = Printer(
             self.config_manager.get("printer", "model"),
             self.config_manager.get("printer", "label", str),
@@ -306,7 +302,7 @@ class Backend(QObject):
                     classification=self.active_item.get("classification"),
                     shelfmark=self.active_item.get("shelfmark"),
                 )
-
+                self.message_sig.emit(f"{self.main_message}")
                 if (
                     rfid_result.tag != self.last_printed_tag
                     and self.overall_state == OverallState.READY_TO_USE

@@ -36,7 +36,7 @@ class ConfigurationManager:
             "state_stability_threshold": 1,
             "backend_refresh_interval": 10,
         },
-        "printer": {"model": "QL-800", "label": "61"},
+        "printer": {"model": "QL-810W", "label": "38"},
     }
 
     def __init__(self, config_file: str = "config.ini"):

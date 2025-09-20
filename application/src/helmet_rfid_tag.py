@@ -602,10 +602,9 @@ class HelmetRfidTag:
         """
         binary_string = "".join(format(byte, "08b") for byte in data_bytes)
         length = 0
-        prev_length = 0
         self.welformed_data = True
         try:
-            while len(binary_string) > 0 and len(binary_string) != prev_length:
+            while len(binary_string) > 0 and len(binary_string) >= 16:
                 offset = binary_string[0]
 
                 encoding = Encoding(int(binary_string[1:4], 2))
@@ -621,72 +620,73 @@ class HelmetRfidTag:
                 except Exception:
                     length = 0
                 data = binary_string[starting_position + 16 : starting_position + 16 + length * 8]
-
-                value = self.decode(encoding=encoding, data=data, oid=oid)
-
-                match oid:
-                    case Oid.PRIMARY_ITEM_IDENTIFIER:
-                        self.primary_item_identifier = value
-                    case Oid.CONTENT_PARAMETER:
-                        self.content_parameter = value
-                    case Oid.OWNER_LIBRARY_ISIL:
-                        self.owner_library_isil = value
-                    case Oid.SET_INFORMATION:
-                        self.set_information = value
-                    case Oid.TYPE_OF_USAGE:
-                        self.type_of_usage = value
-                    case Oid.SHELF_LOCATION:
-                        self.shelf_location = value
-                    case Oid.ONIX_MEDIA_FORMAT:
-                        self.onix_media_format = value
-                    case Oid.MARC_MEDIA_FORMAT:
-                        self.marc_media_format = value
-                    case Oid.SUPPLIER_IDENTIFIER:
-                        self.supplier_identifier = value
-                    case Oid.ORDER_NUMBER:
-                        self.order_number = value
-                    case Oid.ILL_BORROWING_INSTITUTION_ISIL:
-                        self.ill_borrowing_institution_isil = value
-                    case Oid.ILL_BORROWING_TRANSACTION_NUMBER:
-                        self.ill_borrowing_transaction_number = value
-                    case Oid.GS1_PRODUCT_IDENTIFIER:
-                        self.gs1_product_identifier = value
-                    case Oid.ALTERNATIVE_UNIQUE_ITEM_IDENTIFIER:
-                        self.alternative_unique_item_identifier = value
-                    case Oid.LOCAL_DATA_A:
-                        self.local_data_a = value
-                    case Oid.LOCAL_DATA_B:
-                        self.local_data_b = value
-                    case Oid.TITLE:
-                        self.title = value
-                    case Oid.PRODUCT_IDENTIFIER_LOCAL:
-                        self.product_identifier_local = value
-                    case Oid.MEDIA_FORMAT_OTHER:
-                        self.media_format_other = value
-                    case Oid.SUPPLY_CHAIN_STAGE:
-                        self.supply_chain_stage = value
-                    case Oid.SUPPLIER_INVOICE_NUMBER:
-                        self.supplier_invoice_number = value
-                    case Oid.ALTERNATIVE_ITEM_IDENTIFIER:
-                        self.alternative_item_identifier = value
-                    case Oid.ALTERNATIVE_OWNER_LIBRARY_IDENTIFIER:
-                        self.alternative_owner_library_identifier = value
-                    case Oid.SUBSIDIARY_OF_AN_OWNER_LIBRARY:
-                        self.subsidiary_of_an_owner_library = value
-                    case Oid.ALTERNATIVE_ILL_BORROWING_INSTITUTION:
-                        self.alternative_ill_borrowing_institution = value
-                    case Oid.LOCAL_DATA_C:
-                        self.local_data_c = value
-                prev_length = len(binary_string)
+                if data != "":
+                    try:
+                        value = self.decode(encoding=encoding, data=data, oid=oid)
+                    except Exception as e:
+                        print(e)
+                    match oid:
+                        case Oid.PRIMARY_ITEM_IDENTIFIER:
+                            self.primary_item_identifier = value
+                        case Oid.CONTENT_PARAMETER:
+                            self.content_parameter = value
+                        case Oid.OWNER_LIBRARY_ISIL:
+                            self.owner_library_isil = value
+                        case Oid.SET_INFORMATION:
+                            self.set_information = value
+                        case Oid.TYPE_OF_USAGE:
+                            self.type_of_usage = value
+                        case Oid.SHELF_LOCATION:
+                            self.shelf_location = value
+                        case Oid.ONIX_MEDIA_FORMAT:
+                            self.onix_media_format = value
+                        case Oid.MARC_MEDIA_FORMAT:
+                            self.marc_media_format = value
+                        case Oid.SUPPLIER_IDENTIFIER:
+                            self.supplier_identifier = value
+                        case Oid.ORDER_NUMBER:
+                            self.order_number = value
+                        case Oid.ILL_BORROWING_INSTITUTION_ISIL:
+                            self.ill_borrowing_institution_isil = value
+                        case Oid.ILL_BORROWING_TRANSACTION_NUMBER:
+                            self.ill_borrowing_transaction_number = value
+                        case Oid.GS1_PRODUCT_IDENTIFIER:
+                            self.gs1_product_identifier = value
+                        case Oid.ALTERNATIVE_UNIQUE_ITEM_IDENTIFIER:
+                            self.alternative_unique_item_identifier = value
+                        case Oid.LOCAL_DATA_A:
+                            self.local_data_a = value
+                        case Oid.LOCAL_DATA_B:
+                            self.local_data_b = value
+                        case Oid.TITLE:
+                            self.title = value
+                        case Oid.PRODUCT_IDENTIFIER_LOCAL:
+                            self.product_identifier_local = value
+                        case Oid.MEDIA_FORMAT_OTHER:
+                            self.media_format_other = value
+                        case Oid.SUPPLY_CHAIN_STAGE:
+                            self.supply_chain_stage = value
+                        case Oid.SUPPLIER_INVOICE_NUMBER:
+                            self.supplier_invoice_number = value
+                        case Oid.ALTERNATIVE_ITEM_IDENTIFIER:
+                            self.alternative_item_identifier = value
+                        case Oid.ALTERNATIVE_OWNER_LIBRARY_IDENTIFIER:
+                            self.alternative_owner_library_identifier = value
+                        case Oid.SUBSIDIARY_OF_AN_OWNER_LIBRARY:
+                            self.subsidiary_of_an_owner_library = value
+                        case Oid.ALTERNATIVE_ILL_BORROWING_INSTITUTION:
+                            self.alternative_ill_borrowing_institution = value
+                        case Oid.LOCAL_DATA_C:
+                            self.local_data_c = value
                 binary_string = binary_string[(starting_position + 16 + length * 8 + padding * 8) :]
         except Exception:
             self.welformed_data = False
 
         if self.primary_item_identifier is None or self.primary_item_identifier == "":
             self.welformed_data = False
+        """
         if self.content_parameter is None:
             self.welformed_data = False
-        """
         if self.content_parameter is not None:
             for value in self.content_parameter:
                 oid = Oid(value)
@@ -770,4 +770,4 @@ class HelmetRfidTag:
                     case Oid.LOCAL_DATA_C:
                         if self.local_data_c is None:
                             self.welformed_data = False
-            """
+        """
