@@ -2,19 +2,16 @@
 Unit tests for the shelfmark hybrid property of SierraItem class.
 """
 
-import ast
-import json
 import os
 import sys
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
-import regex
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from models.sierra_item import SierraItem, signumize
+from models.sierra_item import SierraItem, signumize  # noqa!
 
 
 class TestSierraItemShelfmark:
@@ -59,7 +56,7 @@ class TestSierraItemShelfmark:
     def test_real_world_example_1(self):
         """Test real world example."""
 
-        marc_str = "[{'marc_tag': '100', 'marc_ind1': '1', 'marc_ind2': ' ', 'field_type_code': 'a', 'tag': '0', 'content': '(FIN11)000137780'}, {'marc_tag': '100', 'marc_ind1': '1', 'marc_ind2': ' ', 'field_type_code': 'a', 'tag': 'e', 'content': 'kirjoittaja.'}, {'marc_tag': '100', 'marc_ind1': '1', 'marc_ind2': ' ', 'field_type_code': 'a', 'tag': 'a', 'content': 'Heikkil\u00e4, Markku,'}, {'marc_tag': '245', 'marc_ind1': '1', 'marc_ind2': '0', 'field_type_code': 't', 'tag': 'a', 'content': 'Kaik Turust :'}, {'marc_tag': '245', 'marc_ind1': '1', 'marc_ind2': '0', 'field_type_code': 't', 'tag': 'b', 'content': 'ei viralline mut torelline kr\u00f6ntm\u00e4ntti /'}, {'marc_tag': '245', 'marc_ind1': '1', 'marc_ind2': '0', 'field_type_code': 't', 'tag': 'c', 'content': 'Markku \"F\u00f6rin \u00e4ij\u00e4\" Heikkil\u00e4.'}]"
+        marc_str = "[{'marc_tag': '100', 'marc_ind1': '1', 'marc_ind2': ' ', 'field_type_code': 'a', 'tag': '0', 'content': '(FIN11)000137780'}, {'marc_tag': '100', 'marc_ind1': '1', 'marc_ind2': ' ', 'field_type_code': 'a', 'tag': 'e', 'content': 'kirjoittaja.'}, {'marc_tag': '100', 'marc_ind1': '1', 'marc_ind2': ' ', 'field_type_code': 'a', 'tag': 'a', 'content': 'Heikkil\u00e4, Markku,'}, {'marc_tag': '245', 'marc_ind1': '1', 'marc_ind2': '0', 'field_type_code': 't', 'tag': 'a', 'content': 'Kaik Turust :'}, {'marc_tag': '245', 'marc_ind1': '1', 'marc_ind2': '0', 'field_type_code': 't', 'tag': 'b', 'content': 'ei viralline mut torelline kr\u00f6ntm\u00e4ntti /'}, {'marc_tag': '245', 'marc_ind1': '1', 'marc_ind2': '0', 'field_type_code': 't', 'tag': 'c', 'content': 'Markku \"F\u00f6rin \u00e4ij\u00e4\" Heikkil\u00e4.'}]"  # noqa!
 
         item = self.create_sierra_item(marc_str)
         with patch("models.sierra_item.signumize", return_value="HEI") as mock_signumize:
