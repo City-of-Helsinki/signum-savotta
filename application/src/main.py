@@ -215,6 +215,7 @@ class Backend(QObject):
         self.printer = Printer(
             self.config_manager.get("printer", "model"),
             self.config_manager.get("printer", "label", str),
+            self.config_manager.get("printer", "red", str),
         )
 
         self.printer_state: PrinterState = PrinterState.NO_PRINTER_CONNECTED
@@ -332,7 +333,10 @@ class Backend(QObject):
             self.last_printed_tag = None
 
         self.overall_state = self.state_manager.update_overall_state(
-            self.backend_client, self.reader_state, self.printer_state, battery.percent
+            self.backend_client,
+            self.reader_state,
+            self.printer_state,
+            battery.percent if battery else "no battery",
         )
 
         status_info = self.backend_client.get_status_info()

@@ -108,11 +108,12 @@ class Printer:
     Printer class that handles all printer-specific operations and state management
     """
 
-    def __init__(self, model: str, label: str):
+    def __init__(self, model: str, label: str, red: bool):
         self.state: PrinterState = PrinterState.NO_PRINTER_CONNECTED
         self.device: Optional[Dict[str, Any]] = None
         self.model = model
         self.label = label
+        self.red = red
 
     def discover_printer(self) -> PrintResult:
         """
@@ -170,6 +171,7 @@ class Printer:
             )
             qlr = BrotherQLRaster(self.device.get("model", self.model))
             qlr.exception_on_warning = False
+            print(f"model: {self.model} , label: {self.label} , red: {self.red}")
             instructions = convert(
                 qlr=qlr,
                 images=[image],

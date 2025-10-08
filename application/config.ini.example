@@ -15,3 +15,7 @@ key =
 update_interval_ms = 200
 state_stability_threshold = 3
 backend_refresh_interval = 10
+
+[printer]
+model = QL-810W
+label = 38

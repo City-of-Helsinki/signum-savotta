@@ -36,7 +36,7 @@ class ConfigurationManager:
             "state_stability_threshold": 1,
             "backend_refresh_interval": 10,
         },
-        "printer": {"model": "QL-810W", "label": "38"},
+        "printer": {"model": "QL-810W", "label": "38", "red": False},
     }
 
     def __init__(self, config_file: str = "config.ini"):
@@ -78,6 +78,7 @@ class ConfigurationManager:
                     and config["ui"]["backend_refresh_interval"] != ""
                     and config["printer"]["model"] != ""
                     and config["printer"]["label"] != ""
+                    and config["printer"]["red"] != ""
                 )
 
                 # Initialize Sentry if configuration exists

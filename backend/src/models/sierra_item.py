@@ -132,10 +132,18 @@ class SierraItem(Base):
         try:
             fieldlist = []
             if self.shelfmark_json is not None and self.shelfmark_json != "":
-                preprocessed = regex.sub(r"(?<={| )'", r'"', self.shelfmark_json)
+                preprocessed = regex.sub(
+                    r"\"", r"-----------------------doublequote---", self.shelfmark_json
+                )
+                preprocessed = regex.sub(r"(?<={| )'", r'"', preprocessed)
                 preprocessed = regex.sub(r"'(?=[:,}])", r'"', preprocessed)
+                preprocessed = regex.sub(
+                    r"'-----------------------doublequote---',", r"\"", preprocessed
+                )
+                print(preprocessed)
                 fieldlist = json.loads(preprocessed)
-        except Exception:
+        except Exception as e:
+            print(e)
             return "***"
         """
         FIXME: This could be refactored to priority list instead to avoid multiple loops.
