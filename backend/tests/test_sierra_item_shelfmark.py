@@ -64,6 +64,112 @@ class TestSierraItemShelfmark:
             assert result == "HEI"
             mock_signumize.assert_called_once_with("Heikkilä, Markku,", 0)
 
+    def test_real_world_example_2(self):
+        """Test real world example."""
+
+        marc_str = "[{'marc_tag': '245', 'marc_ind1': '1', 'marc_ind2': '2', 'field_type_code': 't', 'tag': 'a', 'content': \"A user's guide to neglectful parenting /\"}, {'marc_tag': '245', 'marc_ind1': '1', 'marc_ind2': '2', 'field_type_code': 't', 'tag': 'c', 'content': 'Guy Delisle ; translation by Helge Dascher'}, {'marc_tag': '100', 'marc_ind1': '1', 'marc_ind2': ' ', 'field_type_code': 'a', 'tag': 'a', 'content': 'Delisle, Guy'}]"  # noqa!
+
+        item = self.create_sierra_item(marc_str)
+        with patch("models.sierra_item.signumize", return_value="DEL") as mock_signumize:
+            result = item.shelfmark
+            assert result == "DEL"
+            mock_signumize.assert_called_once_with("Delisle, Guy", 0)
+
+    def test_real_world_example_3(self):
+        """Test real world example."""
+
+        marc_str = "[{'marc_tag': '245', 'marc_ind1': '1', 'marc_ind2': '0', 'field_type_code': 't', 'tag': 'c', 'content': 'by Carl Barks.'}, {'marc_tag': '245', 'marc_ind1': '1', 'marc_ind2': '0', 'field_type_code': 't', 'tag': 'b', 'content': '\"Donald Duck finds pirate gold\" /'}, {'marc_tag': '245', 'marc_ind1': '1', 'marc_ind2': '0', 'field_type_code': 't','tag': 'a', 'content': \"Walt Disney's Donald Duck :\"}, {'marc_tag': '100', 'marc_ind1': '1', 'marc_ind2': ' ', 'field_type_code': 'a', 'tag': '0', 'content': '(FI-ASTERI-N)000222048'}, {'marc_tag': '100', 'marc_ind1': '1', 'marc_ind2': ' ', 'field_type_code': 'a', 'tag': 'e', 'content': 'sarjakuvantekij\u00e4.'}, {'marc_tag': '100', 'marc_ind1': '1', 'marc_ind2': ' ', 'field_type_code': 'a', 'tag': 'a', 'content': 'Barks, Carl,'}]"  # noqa!
+
+        item = self.create_sierra_item(marc_str)
+        with patch("models.sierra_item.signumize", return_value="BAR") as mock_signumize:
+            result = item.shelfmark
+            assert result == "BAR"
+            mock_signumize.assert_called_once_with("Barks, Carl,", 0)
+
+    def test_real_world_example_4(self):
+        """Test real world example."""
+
+        marc_str = "[{'marc_tag': '245', 'marc_ind1': '1', 'marc_ind2': '0', 'field_type_code': 't', 'tag': 'a', 'content': 'Street hop /'}, {'marc_tag': '245', 'marc_ind1': '1', 'marc_ind2': '0', 'field_type_code': 't', 'tag': 'c', 'content': 'Royce Da 5\\'9\"'}, {'marc_tag': '100', 'marc_ind1': '0', 'marc_ind2': ' ', 'field_type_code': 'a', 'tag': 'a', 'content': 'Royce Da 5\\'9\",'}, {'marc_tag': '100', 'marc_ind1': '0', 'marc_ind2': ' ', 'field_type_code': 'a', 'tag': 'e', 'content': 'esitt\u00e4j\u00e4'}]"  # noqa!
+
+        item = self.create_sierra_item(marc_str)
+        with patch("models.sierra_item.signumize", return_value="ROY") as mock_signumize:
+            result = item.shelfmark
+            assert result == "ROY"
+            mock_signumize.assert_called_once_with("Royce Da 5'9\",", 0)
+
+    def test_real_world_example_3_mixed_quotes(self):
+        """Test real world example with both single and double quotes mixed."""
+        # This simulates PostgreSQL output where some fields have single quotes, others double
+        marc_str = (
+            "[{'marc_tag': '100', 'tag': 'a', 'marc_ind1': '1', 'content': \"O'Connor, Mary\"}, "
+            "{'marc_tag': '245', 'tag': 'a', 'marc_ind1': '1', 'marc_ind2': '4', "
+            "'content': \"The writer's handbook\"}]"
+        )
+
+        item = self.create_sierra_item(marc_str)
+        with patch("models.sierra_item.signumize", return_value="OCO") as mock_signumize:
+            result = item.shelfmark
+            assert result == "OCO"
+            mock_signumize.assert_called_once_with("O'Connor, Mary", 0)
+
+    def test_real_world_example_4_escape_sequences(self):
+        """Test real world example with escape sequences in content."""
+        marc_str = (
+            "[{'marc_tag': '100', 'tag': 'a', 'marc_ind1': '1', "
+            "'content': 'Johnson, \"Big Mike\"'}, "
+            "{'marc_tag': '245', 'tag': 'a', 'marc_ind1': '0', 'marc_ind2': '0', "
+            "'content': 'The book'}]"
+        )
+
+        item = self.create_sierra_item(marc_str)
+        with patch("models.sierra_item.signumize", return_value="JOH") as mock_signumize:
+            result = item.shelfmark
+            assert result == "JOH"
+            mock_signumize.assert_called_once_with('Johnson, "Big Mike"', 0)
+
+    def test_postgresql_pure_single_quotes(self):
+        """Test PostgreSQL format with pure single quotes (ast.literal_eval should work)."""
+        marc_str = "[{'marc_tag': '100', 'tag': 'a', 'marc_ind1': '1', 'content': 'Simple Author'}]"
+
+        item = self.create_sierra_item(marc_str)
+        with patch("models.sierra_item.signumize", return_value="SIM") as mock_signumize:
+            result = item.shelfmark
+            assert result == "SIM"
+            mock_signumize.assert_called_once_with("Simple Author", 0)
+
+    def test_postgresql_mixed_quote_format(self):
+        """Test PostgreSQL format with mixed single/double quotes (JSON normalization needed)."""
+        # When content contains single quotes, PostgreSQL uses double quotes for that field
+        marc_str = (
+            "[{'marc_tag': '100', 'tag': 'a', 'marc_ind1': '1', "
+            "'content': \"Author's Name\"}, "
+            "{'marc_tag': '110', 'tag': 'b', 'marc_ind1': '2', 'content': 'Simple Corp'}]"
+        )
+
+        item = self.create_sierra_item(marc_str)
+        with patch("models.sierra_item.signumize", return_value="AUT") as mock_signumize:
+            result = item.shelfmark
+            assert result == "AUT"
+            mock_signumize.assert_called_once_with("Author's Name", 0)
+
+    def test_complex_nested_quotes(self):
+        """Test handling of complex nested quote scenarios."""
+        marc_str = "[{'marc_tag': '100', 'tag': 'a', 'marc_ind1': '1', 'content': 'O\\'Neil, \"The Boss\" Patrick'}]"
+
+        item = self.create_sierra_item(marc_str)
+        with patch("models.sierra_item.signumize", return_value="ONE") as mock_signumize:
+            result = item.shelfmark
+            assert result == "ONE"
+            mock_signumize.assert_called_once_with('O\'Neil, "The Boss" Patrick', 0)
+
+    def test_malformed_postgresql_format_fallback(self):
+        """Test that malformed PostgreSQL format gracefully falls back to '***'."""
+        marc_str = "[{'marc_tag': '100', 'tag': 'a', 'marc_ind1': '1', 'content': 'Unclosed quote}"  # Malformed
+
+        item = self.create_sierra_item(marc_str)
+        result = item.shelfmark
+        assert result == "***"
+
 
 class TestSignumizeFunction:
     """Test cases for the signumize helper function."""

@@ -2,6 +2,7 @@
 SQLAlchemy model for item data synchronized from Sierra via ETL component
 """
 
+import ast
 import json
 import logging
 from datetime import datetime
@@ -132,18 +133,26 @@ class SierraItem(Base):
         try:
             fieldlist = []
             if self.shelfmark_json is not None and self.shelfmark_json != "":
-                preprocessed = regex.sub(
-                    r"\"", r"-----------------------doublequote---", self.shelfmark_json
-                )
-                preprocessed = regex.sub(r"(?<={| )'", r'"', preprocessed)
-                preprocessed = regex.sub(r"'(?=[:,}])", r'"', preprocessed)
-                preprocessed = regex.sub(
-                    r"'-----------------------doublequote---',", r"\"", preprocessed
-                )
-                print(preprocessed)
-                fieldlist = json.loads(preprocessed)
-        except Exception as e:
-            print(e)
+                # Handle PostgreSQL JSON aggregate format which mixes single and double quotes
+                # Try ast.literal_eval first for pure single-quote format
+                try:
+                    fieldlist = ast.literal_eval(self.shelfmark_json)
+                except (ValueError, SyntaxError):
+                    # Handle mixed quote format: normalize all quotes to double quotes for JSON parsing
+                    # This regex handles the case where some values are single-quoted, others double-quoted
+                    normalized = regex.sub(
+                        r"'([^']*?(?:\\'[^']*?)*?)'(?=\s*[,:}])",  # Single-quoted strings
+                        r'"\1"',
+                        self.shelfmark_json,
+                    )
+                    # Fix escaped single quotes within the content
+                    normalized = normalized.replace("\\'", "'")
+                    # Handle dict/list structure quotes
+                    normalized = (
+                        normalized.replace("':", '":').replace("{'", '{"').replace("', '", '", "')
+                    )
+                    fieldlist = json.loads(normalized)
+        except Exception:
             return "***"
         """
         FIXME: This could be refactored to priority list instead to avoid multiple loops.
