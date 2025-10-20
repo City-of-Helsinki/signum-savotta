@@ -17,7 +17,6 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
-import regex
 import sentry_sdk
 import uvicorn
 from apscheduler.executors.asyncio import AsyncIOExecutor
@@ -44,6 +43,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.inspection import inspect
+from utils.sierra_classification import rebuild_sierra_classification_varfields
 
 # Configuration from environment variables
 SIERRA_API_ENDPOINT = os.getenv("SIERRA_API_ENDPOINT")
@@ -215,6 +215,7 @@ async def send_to_sierra():
     None
     """
     start_time = time.time()
+
     async with async_sessionmaker(engine)() as session:
         async with session.begin():
             stmt = select(SierraItem).where(SierraItem.in_update_queue == True)  # noqa: E712
@@ -250,35 +251,12 @@ async def send_to_sierra():
                     fetched_varfields = response.json()["varFields"]
                     fixed_fields = {}
                     json = {}
-                    updated_existing = False
-                    if fetched_varfields is not None:
-                        for f_index, f_value in enumerate(fetched_varfields):
-                            if f_value["fieldTag"] == "c" and f_value["marcTag"] == "099":
-                                for sf_index, sf_value in enumerate(f_value["subfields"]):
-                                    if sf_value["tag"] == "a":
-                                        old_classification = sf_value["content"]
-                                        genres = regex.match(
-                                            r"(?:[0-9.,\s]+)(\p{L}+)", old_classification
-                                        )
-                                        try:
-                                            genre = genres.groups(0)
-                                        except Exception:
-                                            genre = None
-                                        fetched_varfields[f_index]["subfields"][sf_index][
-                                            "content"
-                                        ] = f"{item.classification}{"" if genre is None else f" {"".join(genre)}"}"
-                                        updated_existing = True
-                    if not updated_existing:
-                        fetched_varfields.append(
-                            {
-                                "fieldTag": "c",
-                                "marcTag": "099",
-                                "ind1": " ",
-                                "ind2": " ",
-                                "subfields": [{"tag": "a", "content": item.classification}],
-                            }
-                        )
-                    json["varFields"] = fetched_varfields
+
+                    # Rebuild classification in varFields using the extracted function
+                    updated_varfields = rebuild_sierra_classification_varfields(
+                        fetched_varfields, item.classification
+                    )
+                    json["varFields"] = updated_varfields
                     if SIERRA_UPDATE_SET_IUSE3:
                         label = (
                             fetched_fixed_fields["93"]["label"]
