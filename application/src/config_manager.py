@@ -36,7 +36,7 @@ class ConfigurationManager:
             "state_stability_threshold": 1,
             "backend_refresh_interval": 10,
         },
-        "printer": {"model": "QL-810W", "label": "38", "red": False},
+        "printer": {"model": "QL-810W", "label": "38", "red": False, "dpi_600": False, "hq": False, "dither": False, "compress": True, "signum_height": 42, "signum_height_cd": 40, "minimum_font_height": 32, "signum_spacing": 10, "font_path": "assets/arialn.ttf", "font_stroke_width": 0},
     }
 
     def __init__(self, config_file: str = "config.ini"):

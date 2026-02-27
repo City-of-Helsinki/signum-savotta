@@ -10,8 +10,11 @@ from typing import Any, Dict, Optional
 import sentry_sdk
 from brother_ql.backends.helpers import discover, send
 from brother_ql.conversion import convert
+from brother_ql.labels import ALL_LABELS
 from brother_ql.raster import BrotherQLRaster
 from PIL import Image, ImageDraw, ImageFont
+
+LABEL_PRINTABLE_WIDTHS = {label.identifier: label.dots_printable[0] for label in ALL_LABELS}
 
 
 class PrinterState(Enum):
@@ -59,7 +62,16 @@ def get_font_size_for_text(text, initial_size, font_path, target_height):
     return font, bbox, height
 
 
-def create_signum(classification, shelfmark, font_path, minimum_font_height, width, height):
+def create_signum(
+    classification,
+    shelfmark,
+    font_path,
+    minimum_font_height,
+    width,
+    height,
+    spacing=10,
+    stroke_width=0,
+):
     """
     create_signum Creates a signum image for printing
 
@@ -91,14 +103,45 @@ def create_signum(classification, shelfmark, font_path, minimum_font_height, wid
         shelfmark, minimum_font_height, font_path, height
     )
 
+    # Prevent overlap: shrink both fonts by one point at a time until the combined
+    # text width fits within the label width.
+    while (
+        draw.textlength(classification, font=classification_font)
+        + spacing
+        + draw.textlength(shelfmark, font=shelfmark_font)
+    ) > width:
+        new_size = classification_font.size - 1
+        if new_size < minimum_font_height:
+            break
+        classification_font = ImageFont.truetype(font_path, new_size)
+        classification_bbox = classification_font.getbbox(classification)
+        classification_height = classification_bbox[3] - classification_bbox[1]
+        shelfmark_font = ImageFont.truetype(font_path, new_size)
+        shelfmark_bbox = shelfmark_font.getbbox(shelfmark)
+        shelfmark_height = shelfmark_bbox[3] - shelfmark_bbox[1]
+
     shelfmark_position = (
         width - draw.textlength(shelfmark, font=shelfmark_font),
         (im_height - shelfmark_height) / 2 - shelfmark_bbox[1],
     )
     classification_position = (0, (im_height - classification_height) / 2 - classification_bbox[1])
 
-    draw.text(classification_position, classification, fill="black", font=classification_font)
-    draw.text(shelfmark_position, shelfmark, fill="black", font=shelfmark_font)
+    draw.text(
+        classification_position,
+        classification,
+        fill="black",
+        font=classification_font,
+        stroke_width=stroke_width,
+        stroke_fill="black",
+    )
+    draw.text(
+        shelfmark_position,
+        shelfmark,
+        fill="black",
+        font=shelfmark_font,
+        stroke_width=stroke_width,
+        stroke_fill="black",
+    )
 
     return image
 
@@ -108,12 +151,37 @@ class Printer:
     Printer class that handles all printer-specific operations and state management
     """
 
-    def __init__(self, model: str, label: str, red: bool):
+    def __init__(
+        self,
+        model: str,
+        label: str,
+        red: bool,
+        dpi_600: bool = False,
+        hq: bool = False,
+        dither: bool = False,
+        compress: bool = True,
+        signum_height: int = 42,
+        signum_height_cd: int = 40,
+        minimum_font_height: int = 32,
+        signum_spacing: int = 10,
+        font_path: str = "assets/arialn.ttf",
+        font_stroke_width: int = 0,
+    ):
         self.state: PrinterState = PrinterState.NO_PRINTER_CONNECTED
         self.device: Optional[Dict[str, Any]] = None
         self.model = model
         self.label = label
         self.red = red
+        self.dpi_600 = dpi_600
+        self.hq = hq
+        self.dither = dither
+        self.compress = compress
+        self.signum_height = signum_height
+        self.signum_height_cd = signum_height_cd
+        self.minimum_font_height = minimum_font_height
+        self.signum_spacing = signum_spacing
+        self.font_path = font_path
+        self.font_stroke_width = font_stroke_width
 
     def discover_printer(self) -> PrintResult:
         """
@@ -155,34 +223,37 @@ class Printer:
         try:
             # Print different size signum sticker for CDs
             if material_code == "3":
-                signum_height = 40
-                minimum_font_height = 32
+                signum_height = self.signum_height_cd
             else:
-                signum_height = 42
-                minimum_font_height = 32
+                signum_height = self.signum_height
 
+            dpi_scale = 2 if self.dpi_600 else 1
             image = create_signum(
-                classification=classification,
-                shelfmark=shelfmark,
-                font_path="assets/arial.ttf",
-                minimum_font_height=minimum_font_height,
-                width=413,
-                height=signum_height,
+                classification="88.88888",  # classification,
+                shelfmark="ÄÖÅ",  # shelfmark,
+                font_path=self.font_path,
+                minimum_font_height=self.minimum_font_height * dpi_scale,
+                width=LABEL_PRINTABLE_WIDTHS.get(self.label, 413) * dpi_scale,
+                height=signum_height * dpi_scale,
+                spacing=self.signum_spacing * dpi_scale,
+                stroke_width=self.font_stroke_width * dpi_scale,
             )
             qlr = BrotherQLRaster(self.device.get("model", self.model))
             qlr.exception_on_warning = False
-            print(f"model: {self.model} , label: {self.label} , red: {self.red}")
+            print(
+                f"model: {self.model} , label: {self.label} , red: {self.red} , dpi_600: {self.dpi_600} , hq: {self.hq}"
+            )
             instructions = convert(
                 qlr=qlr,
                 images=[image],
                 label=self.label,
                 rotate="auto",
                 threshold=70.0,
-                dither=False,
-                compress=True,
-                red=False,
-                dpi_600=False,
-                hq=False,
+                dither=self.dither,
+                compress=self.compress,
+                red=self.red,
+                dpi_600=self.dpi_600,
+                hq=self.hq,
             )
             # Uncomment the line below to show the signum in a window for debugging purposes
             # image.show()

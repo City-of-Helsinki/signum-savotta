@@ -20,6 +20,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    text,
 )
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column
@@ -92,7 +93,14 @@ class SierraItem(Base):
     """
 
     __tablename__ = "sierra_item"
-    __table_args__ = (Index("ix_barcode", "barcode", postgresql_using="hash"),)
+    __table_args__ = (
+        Index("ix_barcode", "barcode", postgresql_using="hash"),
+        Index(
+            "ix_items_in_update_queue",
+            "in_update_queue",
+            postgresql_where=text("in_update_queue = true"),
+        ),
+    )
 
     item_record_id: Mapped[int] = mapped_column("item_record_id", BigInteger, primary_key=True)
     item_number: Mapped[Optional[str]] = mapped_column("item_number", Text)

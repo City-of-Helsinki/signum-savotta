@@ -212,10 +212,23 @@ class Backend(QObject):
         self.active_item: str | None = None
         self.last_printed_tag: HelmetRfidTag | None = None
 
+        def parse_bool(x):
+            return str(x).lower() in ("true", "1", "yes", "on")
+
         self.printer = Printer(
             self.config_manager.get("printer", "model"),
             self.config_manager.get("printer", "label", str),
-            self.config_manager.get("printer", "red", str),
+            bool(self.config_manager.get("printer", "red", parse_bool) or False),
+            bool(self.config_manager.get("printer", "dpi_600", parse_bool) or False),
+            bool(self.config_manager.get("printer", "hq", parse_bool) or False),
+            bool(self.config_manager.get("printer", "dither", parse_bool) or False),
+            bool(self.config_manager.get("printer", "compress", parse_bool) or False),
+            int(self.config_manager.get("printer", "signum_height", int) or 42),
+            int(self.config_manager.get("printer", "signum_height_cd", int) or 40),
+            int(self.config_manager.get("printer", "minimum_font_height", int) or 32),
+            int(self.config_manager.get("printer", "signum_spacing", int) or 10),
+            str(self.config_manager.get("printer", "font_path", str) or "assets/arialn.ttf"),
+            int(self.config_manager.get("printer", "font_stroke_width", int) or 0),
         )
 
         self.printer_state: PrinterState = PrinterState.NO_PRINTER_CONNECTED
