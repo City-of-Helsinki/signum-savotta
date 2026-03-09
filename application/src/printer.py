@@ -229,8 +229,8 @@ class Printer:
 
             dpi_scale = 2 if self.dpi_600 else 1
             image = create_signum(
-                classification="88.88888",  # classification,
-                shelfmark="ÄÖÅ",  # shelfmark,
+                classification=classification,
+                shelfmark=shelfmark,
                 font_path=self.font_path,
                 minimum_font_height=self.minimum_font_height * dpi_scale,
                 width=LABEL_PRINTABLE_WIDTHS.get(self.label, 413) * dpi_scale,

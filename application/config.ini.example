@@ -1,7 +1,7 @@
 [sentry]
 dsn = 
 environment = 
-release = 
+release = 1.1.0
 
 [backend]
 url = 
@@ -18,4 +18,14 @@ backend_refresh_interval = 10
 
 [printer]
 model = QL-810W
-label = 38
+label = 29
+hq = True
+dpi_600 = True
+red = False
+dither = False
+compress = True
+signum_height = 60
+signum_height_cd = 40
+minimum_font_height = 30
+font_path = assets/arialn.ttf
+font_stroke_width = 1
