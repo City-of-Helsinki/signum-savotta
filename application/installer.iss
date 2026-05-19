@@ -1,5 +1,5 @@
 #define MyAppName "Signum Savotta"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "Helsingin Kaupunginkirjasto"
 #define MyAppExeName "main.exe"
 ; Unique application ID — do NOT change after the first public release,

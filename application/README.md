@@ -45,12 +45,61 @@ Run the application:
 python src/main.py
 ```
 
-## Packaging
+## Building the Windows installer
 
-To build a standalone executable with PyInstaller:
-```sh
-pyinstaller --onefile --icon=assets\signumsavotta.ico --noconsole .\src\main.py
+The end-user deliverable is a single `SignumSavottaSetup.exe` produced by
+`build.ps1`. Run it from the `application` directory in PowerShell:
+
+```powershell
+.\build.ps1
+# or, if Inno Setup is installed somewhere unusual:
+.\build.ps1 -InnoSetupPath "D:\Tools\InnoSetup6\ISCC.exe"
 ```
+
+Output: `application\dist\SignumSavottaSetup.exe`.
+
+### Prerequisites
+
+- **Poetry** — used to run `pyside6-rcc` and `pyinstaller` inside the project
+  virtualenv. Install dependencies once with `poetry install`.
+- **Inno Setup 6** ([jrsoftware.org/issetup.php](https://jrsoftware.org/issetup.php)) —
+  `build.ps1` auto-detects `ISCC.exe` in the standard install locations; pass
+  `-InnoSetupPath` if it lives elsewhere.
+
+### What the build does
+
+`build.ps1` runs three steps:
+
+1. **Compile Qt resources** — `pyside6-rcc assets.qrc -o src/assets_rc.py`.
+2. **Bundle the app with PyInstaller** — `pyinstaller main.spec --clean --noconfirm`.
+   The spec produces a windowed (no console) `main.exe` plus an `_internal`
+   directory with the Python runtime and dependencies under `dist\main\`.
+3. **Compile the installer** — `ISCC.exe installer.iss` packages
+   `dist\main\`, the `assets\` folder, and `config.ini.example` (renamed to
+   `config.ini` at install time) into `dist\SignumSavottaSetup.exe`.
+
+### What the installer does
+
+`installer.iss` is more than a file-copy script — read it before bumping the
+version. Highlights:
+
+- **Install location:** `C:\tulostus` (fixed, dir page disabled). Requires
+  admin privileges for USB device access.
+- **AppId:** `{6D4A2B1C-3E5F-4A8B-9C7D-E0F1A2B3C4D5}` — do **not** change
+  after release, or Windows will treat upgrades as a separate application.
+- **Version:** bump `MyAppVersion` in `installer.iss` for each release.
+- **Config migration:** before overwriting `C:\tulostus`, the installer
+  copies the existing `config.ini` to `%TEMP%`. After writing the new
+  template, a PowerShell script merges the old `[registration]` (and any
+  other previously-set values) into the new file and saves it as UTF-8
+  without BOM — the encoding Python's `configparser` expects.
+- **Runtime write access:** `icacls` grants `Users:(OI)(CI)M` on the install
+  directory so the app can update `config.ini` at runtime without elevation.
+
+### Iterating without rebuilding the installer
+
+To test the bundled app without re-running Inno Setup, run only steps 1–2 and
+launch `dist\main\main.exe` directly.
 
 ## Project Structure
 
