@@ -212,24 +212,7 @@ class Backend(QObject):
         self.active_item: str | None = None
         self.last_printed_tag: HelmetRfidTag | None = None
 
-        def parse_bool(x):
-            return str(x).lower() in ("true", "1", "yes", "on")
-
-        self.printer = Printer(
-            self.config_manager.get("printer", "model"),
-            self.config_manager.get("printer", "label", str),
-            bool(self.config_manager.get("printer", "red", parse_bool) or False),
-            bool(self.config_manager.get("printer", "dpi_600", parse_bool) or False),
-            bool(self.config_manager.get("printer", "hq", parse_bool) or False),
-            bool(self.config_manager.get("printer", "dither", parse_bool) or False),
-            bool(self.config_manager.get("printer", "compress", parse_bool) or False),
-            int(self.config_manager.get("printer", "signum_height", int) or 42),
-            int(self.config_manager.get("printer", "signum_height_cd", int) or 40),
-            int(self.config_manager.get("printer", "minimum_font_height", int) or 32),
-            int(self.config_manager.get("printer", "signum_spacing", int) or 10),
-            str(self.config_manager.get("printer", "font_path", str) or "assets/arialn.ttf"),
-            int(self.config_manager.get("printer", "font_stroke_width", int) or 0),
-        )
+        self.printer = Printer(self.config_manager)
 
         self.printer_state: PrinterState = PrinterState.NO_PRINTER_CONNECTED
 
@@ -322,16 +305,26 @@ class Backend(QObject):
                     and self.overall_state == OverallState.READY_TO_USE
                     and self.active_item is not None
                 ):
-                    print_success = self.printer.print_signum(
-                        classification=self.active_item["classification"],
-                        shelfmark=self.active_item["shelfmark"],
-                        material_code=self.active_item.get("material_code"),
-                    )
+                    # Defer the print to the next event-loop iteration so the
+                    # UI has a chance to repaint the item info from the just-
+                    # emitted message_sig before the (slow on PT-series)
+                    # print_signum blocks the main thread. Capture the values
+                    # by closure since active_item could change before the
+                    # deferred call fires.
+                    classification = self.active_item["classification"]
+                    shelfmark = self.active_item["shelfmark"]
+                    material_code = self.active_item.get("material_code")
+                    item_record_id = self.active_item.get("item_record_id")
 
-                    if print_success:
-                        self.backend_client.update_sierra_item(
-                            self.active_item.get("item_record_id")
-                        )
+                    def _deferred_print():
+                        if self.printer.print_signum(
+                            classification=classification,
+                            shelfmark=shelfmark,
+                            material_code=material_code,
+                        ):
+                            self.backend_client.update_sierra_item(item_record_id)
+
+                    QTimer.singleShot(0, _deferred_print)
                 self.last_printed_tag = rfid_result.tag
             else:
                 if self.backend_client.backend_state == BackendState.BACKEND_EMPTY_RESPONSE:

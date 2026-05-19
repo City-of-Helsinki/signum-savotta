@@ -36,7 +36,30 @@ class ConfigurationManager:
             "state_stability_threshold": 1,
             "backend_refresh_interval": 10,
         },
-        "printer": {"model": "QL-810W", "label": "38", "red": False, "dpi_600": False, "hq": False, "dither": False, "compress": True, "signum_height": 42, "signum_height_cd": 40, "minimum_font_height": 32, "signum_spacing": 10, "font_path": "assets/arialn.ttf", "font_stroke_width": 0},
+        "printer": {
+            "backend": "ql",
+            "model": "QL-810W",
+            "label": "38",
+            "red": False,
+            "dpi_600": False,
+            "hq": False,
+            "dither": False,
+            "compress": True,
+            "signum_height": 42,
+            "signum_height_cd": 40,
+            "minimum_font_height": 32,
+            "signum_spacing": 10,
+            "font_path": "assets/arialn.ttf",
+            "font_stroke_width": 0,
+            "serial": "",
+            "margin_px": 0,
+            "signum_length_pt": 200,
+            "signum_length_cd_pt": 180,
+            "minimum_font_height_pt": 30,
+            "signum_spacing_pt": 6,
+            "font_stroke_width_pt": 0,
+            "cut_mode": "auto",
+        },
     }
 
     def __init__(self, config_file: str = "config.ini"):
@@ -65,6 +88,20 @@ class ConfigurationManager:
             with open(self.config_file, "r", encoding="utf-8") as configfile:
                 config.read_file(configfile)
 
+                printer_backend = config["printer"].get("backend", "ql").strip().lower()
+                if printer_backend == "pt":
+                    printer_ok = (
+                        config["printer"].get("signum_length_pt", "") != ""
+                        and config["printer"].get("signum_length_cd_pt", "") != ""
+                        and config["printer"].get("minimum_font_height_pt", "") != ""
+                    )
+                else:
+                    printer_ok = (
+                        config["printer"].get("model", "") != ""
+                        and config["printer"].get("label", "") != ""
+                        and config["printer"].get("red", "") != ""
+                    )
+
                 has_correct_values = (
                     config["sentry"]["dsn"] != ""
                     and config["sentry"]["environment"] != ""
@@ -76,9 +113,7 @@ class ConfigurationManager:
                     and config["ui"]["update_interval_ms"] != ""
                     and config["ui"]["state_stability_threshold"] != ""
                     and config["ui"]["backend_refresh_interval"] != ""
-                    and config["printer"]["model"] != ""
-                    and config["printer"]["label"] != ""
-                    and config["printer"]["red"] != ""
+                    and printer_ok
                 )
 
                 # Initialize Sentry if configuration exists
