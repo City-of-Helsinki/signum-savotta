@@ -67,12 +67,12 @@ var
 procedure InitializeWizard;
 begin
   { Copy the existing config to a temp file NOW, before the installer
-    overwrites C:\tulostus. FileCopy preserves the original encoding. }
+    overwrites C:\tulostus. CopyFile preserves the original encoding. }
   OldConfigTempPath := '';
   if FileExists('C:\tulostus\config.ini') then
   begin
     OldConfigTempPath := ExpandConstant('{tmp}\signum_old_config.ini');
-    if not FileCopy('C:\tulostus\config.ini', OldConfigTempPath, False) then
+    if not CopyFile('C:\tulostus\config.ini', OldConfigTempPath, False) then
       OldConfigTempPath := '';
   end;
 end;
