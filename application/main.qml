@@ -455,4 +455,60 @@ ApplicationWindow {
             }
         }
     }
+
+    // Invisible focus item that captures keystrokes from the keyboard-
+    // emulating barcode scanner. Buffers characters as they arrive and
+    // submits the whole string to the backend on Enter/Tab. Releases
+    // focus while the config dialog is open so the TextFields work.
+    Item {
+        id: barcodeCapture
+        anchors.fill: parent
+        focus: !mainWindow.configMode
+        property string buffer: ""
+        property int minLength: mainWindow.backend ? mainWindow.backend.barcodeMinLength() : 5
+
+        function submit() {
+            if (barcodeCapture.buffer.length >= barcodeCapture.minLength &&
+                mainWindow.backend) {
+                mainWindow.backend.submitBarcode(barcodeCapture.buffer)
+            }
+            barcodeCapture.buffer = ""
+        }
+
+        Keys.onPressed: (event) => {
+            if (event.key === Qt.Key_Return ||
+                event.key === Qt.Key_Enter ||
+                event.key === Qt.Key_Tab) {
+                barcodeCapture.submit()
+                event.accepted = true
+            } else if (event.text.length > 0 &&
+                       event.text.charCodeAt(0) >= 32) {
+                barcodeCapture.buffer += event.text
+                event.accepted = true
+            }
+        }
+    }
+
+    // Live overlay showing the in-progress scan buffer. Hides itself a
+    // moment after the buffer clears so a successful scan flashes briefly.
+    Rectangle {
+        id: barcodeOverlay
+        visible: barcodeCapture.buffer.length > 0
+        anchors.bottom: statusBar.top
+        anchors.right: parent.right
+        anchors.margins: 12
+        width: scanText.implicitWidth + 24
+        height: scanText.implicitHeight + 12
+        radius: 4
+        color: "#333333"
+        opacity: 0.85
+        Text {
+            id: scanText
+            anchors.centerIn: parent
+            text: "Skannataan: " + barcodeCapture.buffer
+            color: "white"
+            font.pixelSize: 16
+            font.family: helsinkiGrotesk.name
+        }
+    }
 }

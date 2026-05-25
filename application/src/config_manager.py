@@ -36,6 +36,10 @@ class ConfigurationManager:
             "state_stability_threshold": 1,
             "backend_refresh_interval": 10,
         },
+        "barcode": {
+            "barcode_only": False,
+            "min_length": 5,
+        },
         "printer": {
             "backend": "ql",
             "model": "QL-810W",
