@@ -39,7 +39,7 @@ from models.base import Base
 from models.client import Client, ClientType
 from models.sierra_item import SierraItem
 from schemas import sierra_item_schema
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.inspection import inspect
@@ -57,6 +57,7 @@ SIERRA_UPDATE_MISFIRE_GRACE_TIME_SECONDS = int(
     os.getenv("SIERRA_UPDATE_MISFIRE_GRACE_TIME_SECONDS", default=10)
 )
 SIERRA_UPDATE_BATCH_SIZE_LIMIT = int(os.getenv("SIERRA_UPDATE_BATCH_SIZE_LIMIT", default=20))
+SIERRA_UPDATE_MAX_RETRIES = int(os.getenv("SIERRA_UPDATE_MAX_RETRIES", default=10))
 SIERRA_UPDATE_SET_IUSE3 = bool(os.getenv("SIERRA_UPDATE_SET_IUSE3", default=True))
 SIERRA_UPDATE_SET_INVDA = bool(os.getenv("SIERRA_UPDATE_SET_INVDA", default=True))
 FULL_SYNC_BATCH_SIZE = int(os.getenv("FULL_SYNC_BATCH_SIZE", 80000))
@@ -218,7 +219,17 @@ async def send_to_sierra():
 
     async with async_sessionmaker(engine)() as session:
         async with session.begin():
-            stmt = select(SierraItem).where(SierraItem.in_update_queue == True)  # noqa: E712
+            stmt = (
+                select(SierraItem)
+                .where(
+                    SierraItem.in_update_queue == True,  # noqa: E712
+                    or_(
+                        SierraItem.retry_count == None,  # noqa: E711
+                        SierraItem.retry_count < SIERRA_UPDATE_MAX_RETRIES,
+                    ),
+                )
+                .order_by(SierraItem.retry_count.asc().nulls_first())
+            )
             if SIERRA_UPDATE_BATCH_SIZE_LIMIT > 0:
                 stmt = stmt.limit(SIERRA_UPDATE_BATCH_SIZE_LIMIT)
             result = await session.execute(stmt)
@@ -298,9 +309,23 @@ async def send_to_sierra():
                         )
                 except Exception as e:
                     logger.error(f"Error {e} while updating Sierra item number {item.item_number}")
-                    pass
+                    await session.execute(
+                        update(SierraItem)
+                        .where(SierraItem.item_record_id == item.item_record_id)
+                        .values(retry_count=func.coalesce(SierraItem.retry_count, 0) + 1)
+                    )
+            exhausted = await session.scalar(
+                select(func.count())
+                .select_from(SierraItem)
+                .where(
+                    SierraItem.in_update_queue == True,  # noqa: E712
+                    SierraItem.retry_count >= SIERRA_UPDATE_MAX_RETRIES,
+                )
+            )
             logger.info(
-                f"Sierra update finished in {time.time() - start_time} seconds. Updated {updated} item records"
+                f"Sierra update finished in {time.time() - start_time} seconds. "
+                f"Updated {updated} item records. "
+                f"{exhausted} item(s) parked at max retries ({SIERRA_UPDATE_MAX_RETRIES})"
             )
 
 
@@ -558,7 +583,8 @@ async def put_item_data(item_record_id: int = Path(..., title="The id of the ite
     Behavior:
     ---------
     - Executes an asynchronous SQLAlchemy `UPDATE` statement to set `in_update_queue = True`
-      for the matching SierraItem.
+      and reset `retry_count = NULL` for the matching SierraItem, giving every (re-)queued
+      item a fresh retry budget and top priority in the update batch.
     - Uses `.returning()` to confirm whether any rows were affected.
     - Returns HTTP 200 with `{"updated": True}` if the item was found and updated.
     - Returns HTTP 404 with `{"updated": False}` if no matching item was found.
@@ -578,7 +604,7 @@ async def put_item_data(item_record_id: int = Path(..., title="The id of the ite
             result = await session.execute(
                 update(SierraItem)
                 .where(SierraItem.item_record_id == item_record_id)
-                .values({"in_update_queue": True})
+                .values({"in_update_queue": True, "retry_count": None})
                 .returning(SierraItem)
             )
             updated_rows = result.scalars().all()
@@ -591,6 +617,48 @@ async def put_item_data(item_record_id: int = Path(..., title="The id of the ite
                 )
             else:
                 raise HTTPException(status_code=404, detail="Item not found")
+
+
+@app.post(
+    "/sierra-update-queue/reset-exhausted",
+    tags=["item"],
+    dependencies=[Depends(allow_etl_client_only)],
+)
+async def reset_exhausted_sierra_updates():
+    """
+    Re-queues all SierraItem records that have exhausted their update retry budget.
+
+    Items whose `retry_count` has reached `SIERRA_UPDATE_MAX_RETRIES` are skipped by the background
+    update task. This endpoint resets `retry_count` to NULL and sets `in_update_queue = True` for
+    those items, so they are retried again with top priority. Intended for operators to call after
+    fixing the underlying invalid data in Sierra.
+
+    Security:
+    ---------
+    - Access is restricted to clients authorized via the `allow_etl_client_only` dependency.
+
+    Returns:
+    --------
+    JSONResponse
+        A JSON object with the number of re-queued items, e.g. {"requeued": 42}.
+    """
+
+    async with async_sessionmaker(autocommit=False, bind=engine)() as session:
+        async with session.begin():
+            # in_update_queue == True is redundant with retry_count >= MAX (exhausted items are
+            # never cleared from the queue), but it lets this use the ix_items_in_update_queue
+            # partial index instead of a full table scan on the unindexed retry_count column.
+            result = await session.execute(
+                update(SierraItem)
+                .where(
+                    SierraItem.in_update_queue == True,  # noqa: E712
+                    SierraItem.retry_count >= SIERRA_UPDATE_MAX_RETRIES,
+                )
+                .values({"in_update_queue": True, "retry_count": None})
+                .returning(SierraItem.item_record_id)
+            )
+            requeued = len(result.scalars().all())
+    return JSONResponse(status_code=200, content={"requeued": requeued})
 
 
 @app.get("/sync", tags=["sync"], dependencies=[Depends(allow_etl_client_only)])

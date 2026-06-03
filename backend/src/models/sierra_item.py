@@ -84,6 +84,9 @@ class SierraItem(Base):
             the three-letter alphabetic sorting string (pääsana).
         updated_at (datetime): Timestamp of the last update.
         in_update_queue (bool): If true, the item has been printer and waiting to be updated to Sierra.
+        retry_count (Optional[int]): Number of failed Sierra update attempts. NULL means never
+            attempted (highest priority); items reaching the configured max are skipped until the
+            count is reset (via ETL re-sync, re-queue, or the reset-exhausted endpoint).
 
     Hybrid Properties:
         shelfmark (str): A three-letter string used for alphabetic sorting, derived from MARC fields.
@@ -117,6 +120,7 @@ class SierraItem(Base):
     shelfmark_json: Mapped[Optional[str]] = mapped_column("shelfmark_json", JSON)
     updated_at: Mapped[datetime] = mapped_column("updated_at", DateTime(timezone=True))
     in_update_queue: Mapped[bool] = mapped_column("in_update_queue", Boolean, default=False)
+    retry_count: Mapped[Optional[int]] = mapped_column("retry_count", SmallInteger, nullable=True)
 
     @hybrid_property
     def shelfmark(self) -> str:
